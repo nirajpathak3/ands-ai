@@ -1,0 +1,8 @@
+# Ignore project workspaces (pushed separately)
+/obs-agent/
+/veho-platform/
+/---veho-platform-old/
+
+# Ignore local/active development runtime states
+.agent/runtime_state/*
+!.agent/runtime_state/.gitkeep # keep the folder structure
