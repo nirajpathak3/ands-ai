@@ -7,10 +7,10 @@ used by the dataset labels, the eval harness, and the LangGraph nodes.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     INFO = "info"
     LOW = "low"
     MEDIUM = "medium"
@@ -18,7 +18,7 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """Triage action the Ticket Decision Node recommends."""
 
     CREATE_TICKET = "create_ticket"
@@ -26,7 +26,7 @@ class Action(str, Enum):
     ESCALATE = "escalate"
 
 
-class Disposition(str, Enum):
+class Disposition(StrEnum):
     """Governance outcome from the confidence gate.
 
     Mirrors the obs-agent AuthorityEvaluationService pattern

@@ -148,17 +148,51 @@ def heuristic_predictor(finding: Finding) -> Prediction:
     }
 
 
-def runtime_predictor(finding: Finding) -> Prediction:
-    """Placeholder for the LangGraph/LLM-backed predictor (wired on Day 2+).
+def _load_runtime_analyzer() -> Callable[[Finding], Dict[str, object]]:
+    """Load the agent-runtime analysis core (pure stdlib) directly from its file.
 
-    Will call services/agent-runtime (Finding Analysis Node -> Ticket Decision
-    Node -> Governance Gate) through the AI Gateway and validate the structured
-    output before returning it here.
+    We import by path rather than installing the package so the eval harness keeps
+    its zero-dependency, run-anywhere property. The analysis module is deliberately
+    self-contained (no intra-package imports) so it loads in isolation.
     """
-    raise NotImplementedError(
-        "The 'runtime' predictor is not wired yet. Use --predictor heuristic for now. "
-        "Day 2 connects this to services/agent-runtime."
-    )
+    import importlib.util
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    analysis_path = repo_root / "services" / "agent-runtime" / "app" / "analysis.py"
+    if not analysis_path.exists():
+        raise SystemExit(f"agent-runtime analysis core not found at {analysis_path}")
+
+    spec = importlib.util.spec_from_file_location("agent_runtime_analysis", analysis_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Could not load analysis core from {analysis_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.analyze_finding
+
+
+_runtime_analyzer: Callable[[Finding], Dict[str, object]] | None = None
+
+
+def runtime_predictor(finding: Finding) -> Prediction:
+    """The agent-runtime predictor: the Finding Analysis Node's reasoning.
+
+    Day 2 wires this to the same deterministic analysis core the LangGraph runtime
+    uses (services/agent-runtime/app/analysis.py), so `--predictor runtime` measures
+    the actual node logic offline. On Day 11 the AI Gateway swaps a real LLM in
+    behind the node's LLMClient seam; this predictor then measures that model.
+    """
+    global _runtime_analyzer
+    if _runtime_analyzer is None:
+        _runtime_analyzer = _load_runtime_analyzer()
+
+    analysis = _runtime_analyzer(finding)
+    return {
+        "severity": analysis["severity"],
+        "action": analysis["recommendedAction"],
+        "confidence": analysis["confidence"],
+        "reason": analysis["reason"],
+    }
 
 
 _PREDICTORS: Dict[str, Callable[[Finding], Prediction]] = {

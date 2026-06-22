@@ -10,8 +10,6 @@ governance, idempotency) avoid this import so they stay testable without it.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import Action, Disposition, Severity
@@ -28,12 +26,12 @@ class Finding(BaseModel):
     title: str
     message: str
     file: str
-    startLine: Optional[int] = None
-    endLine: Optional[int] = None
-    codeSnippet: Optional[str] = None
-    cwe: Optional[str] = None
-    owasp: Optional[str] = None
-    scannerSeverity: Optional[str] = None
+    startLine: int | None = None
+    endLine: int | None = None
+    codeSnippet: str | None = None
+    cwe: str | None = None
+    owasp: str | None = None
+    scannerSeverity: str | None = None
 
 
 class AnalysisResult(BaseModel):

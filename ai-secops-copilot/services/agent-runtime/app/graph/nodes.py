@@ -1,9 +1,10 @@
 """LangGraph nodes.
 
-Day-1 scaffold: structure and contracts are in place. The Finding Analysis Node
-is a stub until Day 2 (it will call the AI Gateway, then validate the structured
-output via schemas.AnalysisResult). The Governance Gate already uses the real
-governance logic so the end-to-end shape is correct from the start.
+Day 2 wires the walking skeleton: the Finding Analysis Node calls the LLM client
+seam, validates the structured output (schemas.AnalysisResult), bounded-retries on
+invalid output, and escalates if it never validates. The Governance Gate uses the
+real governance logic, so the end-to-end shape is correct. RAG context (Day 5) and
+the real LLM via the AI Gateway (Day 11) slot in behind the same seams.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from .. import governance
 from ..config import get_settings
 from ..domain import Action
 from ..idempotency import finding_hash
+from ..llm import analyze_and_validate, get_default_client
 from .state import GraphState
 
 
@@ -27,15 +29,38 @@ def ingest_node(state: GraphState) -> GraphState:
 def finding_analysis_node(state: GraphState) -> GraphState:
     """Analyze the finding into {severity, confidence, reason, recommendedAction}.
 
-    TODO(Day 2): call the AI Gateway (single LLM egress), pass RAG context
-    (Day 5), validate the response with schemas.AnalysisResult, and bounded-retry
-    on invalid structured output. Finding text is treated as UNTRUSTED input and
-    must be isolated from system instructions (ADR-011).
+    Calls the LLM client (DeterministicLLM today; the AI Gateway on Day 11) and
+    validates the structured output before it is allowed to drive any action
+    (ADR-010). Finding text is treated as UNTRUSTED input, isolated from system
+    instructions in prompts.py (ADR-011). On repeated invalid output the finding is
+    escalated rather than acted on (PRODUCT_VISION failure handling).
     """
-    raise NotImplementedError(
-        "finding_analysis_node is a Day-1 scaffold stub. "
-        "Day 2 wires the AI Gateway call + structured-output validation."
+    settings = get_settings()
+    finding = state.get("finding", {})
+    client = state.get("_client") or get_default_client()
+
+    result, attempts, error = analyze_and_validate(
+        finding, client, max_retries=settings.analysis_max_retries
     )
+    state["retries"] = attempts
+
+    if result is None:
+        state.setdefault("errors", []).append(
+            f"finding_analysis_node: invalid model output after {attempts} attempt(s): {error}"
+        )
+        state["analysis"] = {
+            "severity": "medium",
+            "confidence": 0.0,
+            "reason": (
+                "Model output failed structured-output validation after bounded "
+                f"retries ({error}); escalating for human review."
+            ),
+            "recommendedAction": Action.ESCALATE.value,
+        }
+        return state
+
+    state["analysis"] = result.model_dump(mode="json")
+    return state
 
 
 def ticket_decision_node(state: GraphState) -> GraphState:

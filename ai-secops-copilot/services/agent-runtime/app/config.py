@@ -38,6 +38,9 @@ class Settings:
     auto_threshold: float = _env_float("GOVERNANCE_AUTO_THRESHOLD", DEFAULT_AUTO_THRESHOLD)
     suggest_threshold: float = _env_float("GOVERNANCE_SUGGEST_THRESHOLD", DEFAULT_SUGGEST_THRESHOLD)
 
+    # Bounded re-prompts when the model returns invalid structured output (ADR-010).
+    analysis_max_retries: int = int(os.environ.get("ANALYSIS_MAX_RETRIES", "2"))
+
     # Data stores (wired Day 5+; placeholders for now).
     database_url: str = os.environ.get("DATABASE_URL", "")
     redis_url: str = os.environ.get("REDIS_URL", "")

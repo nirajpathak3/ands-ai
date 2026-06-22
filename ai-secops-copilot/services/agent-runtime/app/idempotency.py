@@ -8,7 +8,7 @@ tickets. Pure stdlib so it is testable in isolation.
 from __future__ import annotations
 
 import hashlib
-from typing import Mapping
+from collections.abc import Mapping
 
 
 def finding_hash(finding: Mapping[str, object]) -> str:

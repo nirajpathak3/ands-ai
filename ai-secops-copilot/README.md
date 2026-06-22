@@ -88,9 +88,37 @@ Vision, architecture, scope, and decisions are **locked**.
 hybrid scaffold (Python LangGraph runtime with a working governance gate &
 idempotency; NestJS AI Gateway with provider fallback + cost/latency metrics).
 
-**Next — Day 2:** walking skeleton end-to-end (Finding → LLM → recommendation →
-approval → mock Jira) with structured-output validation, then swap the eval's
-`heuristic` predictor for the `runtime` predictor to capture the before/after delta.
+**Day 2 complete — walking skeleton end-to-end:** `Finding → analysis (validated
+structured output) → governance gate → action (auto-ticket | human-approval queue
+| escalate)`, with idempotent mock ticketing and a human-in-the-loop approval flow
+(`POST /analyze`, `/approvals`, `/tickets`, `/escalations`). The analysis runs on a
+deterministic, offline **LLM stand-in** (no keys; the AI Gateway swaps a real model
+in on Day 11 behind the same seam) with bounded re-prompt on invalid output and
+prompt-injection isolation of finding text.
+
+The eval's `runtime` predictor now exercises the node's real reasoning. Before/after
+vs the Day-1 heuristic baseline (same 50-finding golden set):
+
+| Metric | Heuristic (Day 1) | Runtime (Day 2) | Δ |
+| --- | --- | --- | --- |
+| Severity accuracy | 86.0% | 96.0% | +10.0 |
+| Action accuracy | 84.0% | 100.0% | +16.0 |
+| False-positive recall | 37.5% | 100.0% | +62.5 |
+| False-positive F1 | 54.5% | 100.0% | +45.5 |
+
+```bash
+python evals/run_eval.py --predictor heuristic --quiet            # writes baseline
+python evals/run_eval.py --predictor runtime --gate \
+  --baseline evals/runs/latest.json                               # shows the delta
+```
+
+> Honest caveat: the deterministic analyzer was calibrated on this same golden set,
+> so these numbers reflect a strong rules baseline, not held-out generalization.
+> The real test is the LLM on unseen findings once the AI Gateway is wired (Day 11);
+> the eval harness and gate are what make that comparison measurable.
+
+**Next — Day 3:** real Jira integration behind the ticketing layer (with the
+idempotency key), ServiceNow mock adapter.
 
 ## Documentation
 
