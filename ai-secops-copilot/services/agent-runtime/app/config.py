@@ -1,0 +1,47 @@
+"""Runtime configuration.
+
+Implemented with stdlib only (dataclass + os.environ) so it imports without any
+third-party packages installed. As the service grows this can migrate to
+pydantic-settings (already listed as a dependency) without changing call sites.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from .governance import DEFAULT_AUTO_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = os.environ.get(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    # Service
+    service_name: str = os.environ.get("SERVICE_NAME", "agent-runtime")
+    environment: str = os.environ.get("ENVIRONMENT", "development")
+    host: str = os.environ.get("HOST", "0.0.0.0")
+    port: int = int(os.environ.get("PORT", "8088"))
+
+    # AI Gateway (single LLM egress; the runtime never calls providers directly).
+    gateway_base_url: str = os.environ.get("GATEWAY_BASE_URL", "http://localhost:3000")
+
+    # Governance thresholds (overridable via env; defaults from PRODUCT_VISION.md).
+    auto_threshold: float = _env_float("GOVERNANCE_AUTO_THRESHOLD", DEFAULT_AUTO_THRESHOLD)
+    suggest_threshold: float = _env_float("GOVERNANCE_SUGGEST_THRESHOLD", DEFAULT_SUGGEST_THRESHOLD)
+
+    # Data stores (wired Day 5+; placeholders for now).
+    database_url: str = os.environ.get("DATABASE_URL", "")
+    redis_url: str = os.environ.get("REDIS_URL", "")
+
+
+def get_settings() -> Settings:
+    return Settings()

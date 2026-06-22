@@ -1,0 +1,45 @@
+# Local development infrastructure for the AI Security Operations Copilot.
+# The data stores are consumed from Day 5 (pgvector RAG) and Day 12 (Redis cache).
+# Application services (gateway, agent-runtime) are added to this compose file as
+# they are containerized on later days.
+#
+#   docker compose up -d        # start postgres + redis
+#   docker compose down         # stop (keeps volumes)
+#   docker compose down -v      # stop and wipe data
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: secops-postgres
+    environment:
+      POSTGRES_USER: secops
+      POSTGRES_PASSWORD: secops
+      POSTGRES_DB: secops
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secops -d secops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: secops-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

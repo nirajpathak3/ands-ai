@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ai-secops-copilot/datasets/schema/security-findings-v1.schema.json",
+  "title": "Security Findings Golden Dataset (v1)",
+  "description": "Normalized SARIF/Semgrep-style finding contract with ground-truth triage labels. Clean-room from public standards (SARIF, Semgrep output, OWASP Top 10, MITRE CWE).",
+  "type": "object",
+  "required": ["version", "name", "findings"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "provenanceNote": { "type": "string" },
+    "labeling": { "type": "object" },
+    "fieldSpec": { "type": "object" },
+    "distribution": { "type": "object" },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/finding" }
+    }
+  },
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scanner",
+        "ruleId",
+        "title",
+        "message",
+        "file",
+        "cwe",
+        "scannerSeverity",
+        "label"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^F-[0-9]{3,}$" },
+        "scanner": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "file": { "type": "string" },
+        "startLine": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 0 },
+        "codeSnippet": { "type": "string" },
+        "cwe": { "type": "string", "pattern": "^CWE-[0-9]+$" },
+        "owasp": { "type": ["string", "null"] },
+        "scannerSeverity": { "type": "string", "enum": ["ERROR", "WARNING", "INFO"] },
+        "provenance": { "type": "string" },
+        "label": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["severity", "expectedAction", "isFalsePositive", "rationale"],
+          "properties": {
+            "severity": {
+              "type": "string",
+              "enum": ["info", "low", "medium", "high", "critical"]
+            },
+            "expectedAction": {
+              "type": "string",
+              "enum": ["create_ticket", "suppress", "escalate"]
+            },
+            "isFalsePositive": { "type": "boolean" },
+            "rationale": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
