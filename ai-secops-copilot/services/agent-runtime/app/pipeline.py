@@ -13,6 +13,7 @@ without changing this contract.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 
 from .graph.nodes import finding_analysis_node, ingest_node, ticket_decision_node
 from .graph.state import GraphState
@@ -25,6 +26,19 @@ from .ticketing import (
     TicketProvider,
     execute_decision,
 )
+
+
+def _get_tracer():
+    try:
+        from .observability import get_tracer
+
+        return get_tracer()
+    except Exception:  # noqa: BLE001 - tracing is best-effort
+        return None
+
+
+def _span(tracer, name: str, **attrs):
+    return tracer.start_span(name, **attrs) if tracer is not None else nullcontext()
 
 
 def run_pipeline(
@@ -47,15 +61,21 @@ def run_pipeline(
     if retriever is not None:
         state["_retriever"] = retriever  # type: ignore[typeddict-unknown-key]
 
-    state = ingest_node(state)
-    state = finding_analysis_node(state)
-    state = ticket_decision_node(state)
+    tracer = _get_tracer()
+    with _span(tracer, "pipeline.run", findingId=str(finding.get("id", ""))):
+        with _span(tracer, "ingest"):
+            state = ingest_node(state)
+        with _span(tracer, "finding_analysis"):
+            state = finding_analysis_node(state)
+        with _span(tracer, "ticket_decision"):
+            state = ticket_decision_node(state)
 
-    decision = state.get("decision", {})
-    action = execute_decision(
-        decision, provider=provider, approvals=approvals,
-        escalations=escalations, dead_letter=dead_letter,
-    )
+        decision = state.get("decision", {})
+        with _span(tracer, "execute"):
+            action = execute_decision(
+                decision, provider=provider, approvals=approvals,
+                escalations=escalations, dead_letter=dead_letter,
+            )
 
     return {
         "decision": decision,

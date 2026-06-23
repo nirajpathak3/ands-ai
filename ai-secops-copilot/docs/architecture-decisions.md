@@ -113,6 +113,24 @@ near-duplicate findings. Keeping it behind the existing seam means nothing downs
 `llm.types.ts`/`cost.ts`); the runtime uses the in-process Python gateway so it stays testable in
 the same pytest/eval harness, with the Node service as the equivalent standalone control plane.
 
+### ADR-015 — Observability & ops: tracing, metrics, alerting
+**Decision:** Add an `app/observability/` layer with three offline-first pillars behind one seam:
+**(1) tracing** — an in-process tracer (`contextvars`-linked spans, ring buffer, structured JSON
+logs) that also exports via **OpenTelemetry** when `OTEL_ENABLED=true` and the SDK is installed;
+**(2) metrics** — a rolling time-series for cost/latency over time plus hand-written **Prometheus**
+text exposition at `/observability/metrics` (no client library); **(3) alerting** — a transparent
+rule engine over a metrics snapshot (escalation rate, approval backlog, gateway fallback rate, cost
+per request, p95 latency, dead-letter presence) at `/observability/alerts`, surfaced on the
+dashboard and in `/health`.
+**Why:** An autonomy-governance platform must be observable and self-policing — operators need to
+see cost/latency trends and be alerted when escalation or spend drifts. Keeping the core stdlib means
+it works with no collector in CI/demo, while OTel/Prometheus make it production-grade with no
+call-site changes. Pure-predicate rules keep *why an alert fired* explainable.
+**Tradeoff:** A small bespoke tracer/exposition instead of pulling the full OTel SDK as a hard
+dependency — deliberate, to preserve the offline-first, zero-setup property; OTel is the opt-in
+upgrade. (Also fixed a fallback-rate definition: a provider skipped as *not-configured* is not a
+fallback, so the offline deterministic-only path correctly reports 0% fallback.)
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

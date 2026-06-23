@@ -82,6 +82,22 @@ class Settings:
     jira_project_key: str = os.environ.get("JIRA_PROJECT_KEY", "")
     jira_issue_type: str = os.environ.get("JIRA_ISSUE_TYPE", "Task")
 
+    # Observability (Day 12, ADR-015). In-process tracing + structured logs always on;
+    # OTel export activates only when OTEL_ENABLED=true and the SDK is installed.
+    otel_enabled: bool = os.environ.get("OTEL_ENABLED", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    otel_endpoint: str = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    log_json: bool = os.environ.get("LOG_JSON", "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Alerting thresholds: a rule fires when the live rate/value exceeds these.
+    alert_escalation_rate: float = _env_float("ALERT_ESCALATION_RATE", 0.30)
+    alert_fallback_rate: float = _env_float("ALERT_FALLBACK_RATE", 0.20)
+    alert_p95_latency_ms: float = _env_float("ALERT_P95_LATENCY_MS", 1500.0)
+    alert_cost_per_request_usd: float = _env_float("ALERT_COST_PER_REQUEST_USD", 0.01)
+    alert_approval_backlog: int = int(os.environ.get("ALERT_APPROVAL_BACKLOG", "25"))
+
     # Data stores. Persistence backend (Day 10) is derived from DATABASE_URL:
     #   ""/unset            -> in-memory (offline default)
     #   sqlite:///path.db   -> durable SQLite (local/CI durability)

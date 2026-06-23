@@ -126,3 +126,33 @@ def test_demo_reset_clears_state():
     cleared = client.get("/metrics").json()
     assert cleared["findingsProcessed"] == 0
     assert cleared["ticketsCreated"] == 0
+
+
+# --- Day 12: observability ---------------------------------------------------
+
+def test_prometheus_metrics_exposition():
+    client.post("/demo/reset")
+    client.post("/demo/seed")
+    resp = client.get("/observability/metrics")
+    assert resp.headers["content-type"].startswith("text/plain")
+    body = resp.text
+    assert "# TYPE secops_llm_requests_total counter" in body
+    assert "secops_findings_processed" in body
+
+
+def test_observability_timeseries_and_traces_after_seed():
+    client.post("/demo/reset")
+    client.post("/demo/seed")
+    ts = client.get("/observability/timeseries").json()
+    assert ts["recentLlm"]  # gateway calls were recorded
+    traces = client.get("/observability/traces").json()
+    assert any(s["name"] == "pipeline.run" for s in traces["spans"])
+
+
+def test_alerts_endpoint_and_health_block():
+    client.post("/demo/reset")
+    alerts = client.get("/observability/alerts").json()
+    assert alerts["count"] == 0  # healthy, empty slate
+    health = client.get("/health").json()
+    assert health["observability"]["tracing"] in ("in-process", "otel")
+    assert health["observability"]["alertsFiring"] == 0

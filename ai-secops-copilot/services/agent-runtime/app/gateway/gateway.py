@@ -13,7 +13,8 @@ never raises: it returns the reproducible analysis with $0 cost.
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 
 from .cache import SemanticCache
 from .cost import estimate_cost_usd
@@ -35,16 +36,35 @@ class Gateway:
         router: Router | None = None,
         cache: SemanticCache | None = None,
         cache_enabled: bool = True,
+        observer: Callable[[dict], None] | None = None,
+        tracer=None,
     ) -> None:
         self._providers = {p.name: p for p in providers}
         self._router = router or Router()
         self._cache = cache if cache is not None else SemanticCache()
         self._cache_enabled = cache_enabled
+        self._observer = observer
+        self._tracer = tracer
         self._metrics = _new_metrics()
 
     # --- core -----------------------------------------------------------------
 
     def complete(self, req: LLMRequest) -> GatewayResult:
+        span_cm = (
+            self._tracer.start_span("llm.complete", task=req.task)
+            if self._tracer is not None else nullcontext()
+        )
+        with span_cm as span:
+            result = self._complete(req)
+            if span is not None:
+                span.attributes.update({
+                    "provider": result.provider, "model": result.model,
+                    "cacheHit": result.cache_hit, "costUsd": result.cost_usd,
+                })
+            self._notify(result, req.task)
+            return result
+
+    def _complete(self, req: LLMRequest) -> GatewayResult:
         self._metrics["totalRequests"] += 1
         start = time.perf_counter()
 
@@ -61,7 +81,7 @@ class Gateway:
                 )
 
         attempts: list[Attempt] = []
-        for idx, name in enumerate(self._router.order(req.task)):
+        for name in self._router.order(req.task):
             provider = self._providers.get(name)
             if provider is None or not provider.is_configured():
                 attempts.append(Attempt(provider=name, ok=False, error="not_configured"))
@@ -75,7 +95,13 @@ class Gateway:
             latency_ms = (time.perf_counter() - start) * 1000
             cost_usd = estimate_cost_usd(response.model, response.usage)
             attempts.append(Attempt(provider=name, ok=True))
-            if idx > 0:
+            # A fallback is only a fallback if a *configured* provider actually failed
+            # first — a provider skipped as "not_configured" (e.g. no API key offline) is
+            # not a degradation, so it must not inflate the fallback rate.
+            real_failures = sum(
+                1 for a in attempts if not a.ok and a.error != "not_configured"
+            )
+            if real_failures > 0:
                 self._metrics["fallbackUsed"] += 1
             self._record(name, latency_ms, cost_usd, response.usage.total_tokens)
             if self._cache_enabled and cache_key is not None:
@@ -91,6 +117,18 @@ class Gateway:
             "all routed providers failed: "
             + ", ".join(f"{a.provider}={a.error}" for a in attempts)
         )
+
+    def _notify(self, result: GatewayResult, task: str) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer({
+                "latency_ms": result.latency_ms, "cost_usd": result.cost_usd,
+                "provider": result.provider, "cache_hit": result.cache_hit,
+                "tokens": result.response.usage.total_tokens, "task": task,
+            })
+        except Exception:  # noqa: BLE001 - observability must never break egress
+            pass
 
     # --- observability --------------------------------------------------------
 

@@ -109,6 +109,16 @@ class _FailingProvider:
         raise ProviderError("boom")
 
 
+def test_not_configured_skip_is_not_a_fallback():
+    # Offline: openai/anthropic are unconfigured (skipped), deterministic answers.
+    # That is the primary available provider, not a fallback -> rate must be 0%.
+    gw = build_gateway(Settings())
+    gw.complete(_analysis_req())
+    m = gw.metrics()
+    assert m["fallbackUsed"] == 0
+    assert m["fallbackRate"] == 0.0
+
+
 def test_gateway_falls_back_to_next_provider():
     gw = Gateway([_FailingProvider(), DeterministicProvider()])
     result = gw.complete(_analysis_req())

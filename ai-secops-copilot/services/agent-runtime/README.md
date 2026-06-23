@@ -20,12 +20,13 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 11 — AI Gateway: single LLM egress)
+## Status (Day 12 — observability & ops: tracing, metrics, alerting)
 
 | Piece | State |
 | --- | --- |
-| **AI Gateway** (task routing, ordered fallback, **semantic cache**, cost/latency tracking) | ✅ implemented + tested |
-| **Providers** (deterministic offline default; OpenAI + Anthropic when keys present) | ✅ implemented + tested |
+| **Observability** (in-process tracing + structured logs, Prometheus exposition, alert engine) | ✅ implemented + tested |
+| AI Gateway (task routing, ordered fallback, **semantic cache**, cost/latency tracking) | ✅ implemented + tested |
+| Providers (deterministic offline default; OpenAI + Anthropic when keys present) | ✅ implemented + tested |
 | Persistence seam (audit/approvals/escalations/dead-letter; memory / SQLite / Postgres) | ✅ implemented + tested |
 | Checkpointer seam (`MemorySaver` default; `PostgresSaver` when configured) | ✅ implemented + tested |
 | Compiled LangGraph (conditional routing, checkpointer, human-approval **interrupt/resume**) | ✅ implemented + tested |
@@ -160,6 +161,23 @@ Set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` to light up the real providers; the
 deterministic provider stays as the final fallback so a provider outage degrades instead
 of failing. `GET /health` shows the active `llm.providers`.
 
+### Observability & ops (Day 12)
+
+Three offline-first pillars under `app/observability/`:
+
+```bash
+curl localhost:8088/observability/metrics      # Prometheus text exposition (scrape target)
+curl localhost:8088/observability/alerts       # firing alerts (escalation/cost/fallback/p95/DLQ)
+curl localhost:8088/observability/timeseries   # cost/latency over time (dashboard charts)
+curl localhost:8088/observability/traces       # recent spans (pipeline.run -> nodes, llm.complete)
+```
+
+- **Tracing** — every pipeline + gateway call is a span (`contextvars`-linked), emitted as a
+  structured JSON log; set `OTEL_ENABLED=true` (with the OTel SDK) to export via OTLP.
+- **Alerting** — transparent threshold rules (env-overridable: `ALERT_ESCALATION_RATE`,
+  `ALERT_FALLBACK_RATE`, `ALERT_P95_LATENCY_MS`, `ALERT_COST_PER_REQUEST_USD`,
+  `ALERT_APPROVAL_BACKLOG`); firing alerts show on the dashboard and in `/health`.
+
 ## Test
 
 ```bash
@@ -185,6 +203,7 @@ app/
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail
 ├─ gateway/         # AI Gateway egress: router / cache / cost / providers / gateway
+├─ observability/   # tracing + time-series + alerts + Prometheus exposition (Day 12)
 ├─ persistence/     # durable state seam: memory / sqlite_store / checkpointer factory
 ├─ config.py        # env-driven settings (incl. DATABASE_URL backend selection)
 ├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)

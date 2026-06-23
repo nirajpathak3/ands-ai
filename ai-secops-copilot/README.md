@@ -234,8 +234,21 @@ of fails. Verified live: re-seeding identical findings produced a **50% cache hi
 The Python egress mirrors the NestJS `services/gateway` scaffold (same `llm.types.ts`/`cost.ts`
 contract) so the hybrid Python+Node story is real while the runtime stays testable in one harness.
 
-**Next — Day 12:** observability + ops — structured tracing/metrics export (OpenTelemetry),
-dashboards for gateway cost/latency over time, and alerting on governance/escalation rates.
+**Day 12 complete — observability & ops:** added an `app/observability/` layer with three
+offline-first pillars. **Tracing** — every pipeline stage and gateway call is a `contextvars`-linked
+span emitted as a structured JSON log (`/observability/traces`), with optional OpenTelemetry OTLP
+export when `OTEL_ENABLED=true`. **Metrics** — a rolling time-series powers cost/latency-over-time
+charts (`/observability/timeseries`) and a hand-written **Prometheus** scrape target
+(`/observability/metrics`, no client library). **Alerting** — a transparent rule engine
+(`/observability/alerts`) fires on escalation rate, approval backlog, gateway fallback rate, cost per
+request, p95 latency, and dead-letter presence, surfaced on the dashboard and in `/health`. The
+dashboard gained an alerts banner and an LLM-latency sparkline. Verified live: seeding produces full
+trace trees (`pipeline.run → ingest/finding_analysis/ticket_decision/execute` + `llm.complete`), a
+valid Prometheus exposition, and **zero false alerts offline** (also fixed a fallback-rate bug so a
+provider skipped as *not-configured* no longer counts as a fallback).
+
+**Next — Day 13:** CI/CD hardening & containerization — Docker images for the runtime + gateway,
+docker-compose with Postgres, and the GitHub Actions pipeline wired to the eval gate + image build.
 
 ## Documentation
 

@@ -25,6 +25,10 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /tickets                        - list (mock) tickets created so far
   * GET  /escalations                    - list escalated findings
   * GET  /gateway/metrics                - AI Gateway egress metrics (Day 11)
+  * GET  /observability/metrics          - Prometheus text exposition (Day 12)
+  * GET  /observability/alerts           - firing alerts (governance/cost/reliability)
+  * GET  /observability/timeseries       - cost/latency over time (charts)
+  * GET  /observability/traces           - recent spans from the in-process tracer
 
 Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
     python -m uvicorn app.main:app --reload --port 8088
@@ -37,7 +41,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from . import __version__
@@ -48,6 +52,15 @@ from .governance import evaluate as governance_evaluate
 from .graph import GraphRunner
 from .ingestion import normalize
 from .metrics import compute_metrics, project_findings
+from .observability import (
+    configure_logging,
+    default_rules,
+    evaluate_alerts,
+    get_timeseries,
+    get_tracer,
+    render_prometheus,
+    reset_observability,
+)
 from .persistence import build_state, get_checkpointer
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
@@ -66,9 +79,12 @@ app = FastAPI(
 
 # Provider is selected from config (mock by default; jira/servicenow when set).
 # Day 10 persists approvals via checkpointing.
+configure_logging(get_settings())  # structured JSON logs + trace context (Day 12)
 _provider = get_ticket_provider(get_settings())
 _retriever = get_retriever(get_settings())
 _gateway = get_gateway(get_settings())  # single LLM egress (Day 11); metrics accumulate here
+_timeseries = get_timeseries()  # rolling cost/latency series (Day 12)
+_tracer = get_tracer(get_settings())
 
 # Durable state (Day 10): in-memory by default, SQLite/Postgres when DATABASE_URL is set.
 _state = build_state(get_settings())
@@ -133,6 +149,13 @@ def health() -> dict:
             "providers": _gateway.metrics()["providers"],
             "cacheEnabled": settings.llm_cache_enabled,
         },
+        "observability": {
+            "tracing": "otel" if settings.otel_enabled else "in-process",
+            "logJson": settings.log_json,
+            "alertsFiring": len(
+                evaluate_alerts(_obs_snapshot(), default_rules(settings))
+            ),
+        },
     }
 
 
@@ -186,6 +209,7 @@ def analyze(req: AnalyzeRequest) -> dict:
     _audit.record(
         out["decision"], out["action"]["outcome"], actor="system", latency_ms=latency_ms
     )
+    _observe_decision(out["decision"], out["action"]["outcome"], latency_ms)
     return out
 
 
@@ -224,6 +248,7 @@ def ingest(req: IngestRequest) -> dict:
         latency_ms = (time.perf_counter() - started) * 1000.0
         outcome = out["action"]["outcome"]
         _audit.record(out["decision"], outcome, actor="system", latency_ms=latency_ms)
+        _observe_decision(out["decision"], outcome, latency_ms)
         summary[outcome] = summary.get(outcome, 0) + 1
         results.append({
             "findingId": out["decision"].get("findingId"),
@@ -318,6 +343,63 @@ def metrics() -> dict:
     )
 
 
+def _observe_decision(decision: dict, outcome: str, latency_ms: float) -> None:
+    """Push a governed decision onto the rolling time-series (Day 12)."""
+    analysis = decision.get("analysis") or {}
+    _timeseries.record_decision(
+        disposition=str(decision.get("disposition", "")),
+        severity=str(analysis.get("severity", "unknown")),
+        latency_ms=latency_ms,
+        outcome=outcome,
+    )
+
+
+def _obs_snapshot() -> dict:
+    """Combined snapshot (KPIs + gateway) that alerts + Prometheus evaluate against."""
+    snap = compute_metrics(
+        _audit.list_all(),
+        tickets=len(_provider.all()),
+        pending_approvals=len(_approvals.list_pending()),
+        escalations=len(_escalations.list_all()),
+        dead_letters=len(_dead_letter.list_all()),
+    )
+    snap["gateway"] = _gateway.metrics()
+    return snap
+
+
+@app.get("/observability/alerts")
+def observability_alerts() -> dict:
+    """Firing alerts over governance/cost/reliability signals (Day 12, ADR-015)."""
+    alerts = evaluate_alerts(_obs_snapshot(), default_rules(get_settings()))
+    return {"count": len(alerts), "alerts": alerts}
+
+
+@app.get("/observability/metrics")
+def observability_metrics() -> PlainTextResponse:
+    """Prometheus text exposition of platform + gateway metrics and alert states."""
+    snapshot = _obs_snapshot()
+    alerts = evaluate_alerts(snapshot, default_rules(get_settings()))
+    return PlainTextResponse(render_prometheus(snapshot, alerts))
+
+
+@app.get("/observability/timeseries")
+def observability_timeseries(window_s: float = 300.0, bucket_s: float = 30.0) -> dict:
+    """Bucketed cost/latency over time for charting (LLM calls + decisions)."""
+    return {
+        "windowS": window_s,
+        "bucketS": bucket_s,
+        "llm": _timeseries.buckets("llm", window_s=window_s, bucket_s=bucket_s),
+        "decisions": _timeseries.buckets("decision", window_s=window_s, bucket_s=bucket_s),
+        "recentLlm": _timeseries.recent("llm", limit=60),
+    }
+
+
+@app.get("/observability/traces")
+def observability_traces(limit: int = 50) -> dict:
+    """Recent spans from the in-process tracer (newest first)."""
+    return {"count": min(limit, 512), "spans": _tracer.recent(limit)}
+
+
 @app.post("/demo/seed")
 def demo_seed() -> dict:
     """One-click demo: ingest the bundled Semgrep + SARIF sample reports.
@@ -351,6 +433,7 @@ def demo_reset() -> dict:
     if hasattr(_provider, "clear"):
         _provider.clear()   # drop mock tickets so idempotency starts fresh
     _gateway = reset_gateway(get_settings())  # drop gateway cache + metrics
+    reset_observability(get_settings())       # clear traces + time-series
     _graph_runner = _make_graph_runner()  # fresh checkpointer for the HITL graph
     return {"status": "reset", "backend": _state.backend}
 
@@ -382,10 +465,9 @@ def graph_analyze(req: AnalyzeRequest) -> dict:
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
     decision = out.get("decision") or {}
-    if out["status"] == "completed":
-        _audit.record(decision, out["action"]["outcome"], actor="system", latency_ms=latency_ms)
-    else:
-        _audit.record(decision, "pending_approval", actor="system", latency_ms=latency_ms)
+    outcome = out["action"]["outcome"] if out["status"] == "completed" else "pending_approval"
+    _audit.record(decision, outcome, actor="system", latency_ms=latency_ms)
+    _observe_decision(decision, outcome, latency_ms)
     return out
 
 

@@ -67,6 +67,19 @@
     transition: opacity .25s; pointer-events: none; max-width: 360px; }
   #toast.show { opacity: 1; }
   .pill { font-size: 11px; color: var(--muted); }
+  .alerts { display: grid; gap: 8px; margin-bottom: 16px; }
+  .alert { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
+  .alert .tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    padding: 2px 8px; border-radius: 999px; }
+  .alert.critical { border-color: #6b2020; background: #2a1212; }
+  .alert.critical .tag { background: #6b2020; color: #fbd0d0; }
+  .alert.warning { border-color: #6b561c; background: #261f0f; }
+  .alert.warning .tag { background: #6b561c; color: #fde9bf; }
+  .alert.info .tag { background: #1c3a6b; color: #c7dbff; }
+  .ok-banner { color: var(--accent-2); font-size: 12px; padding: 8px 4px; }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 38px; margin-top: 6px; }
+  .spark > span { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; opacity: .85; }
 </style>
 </head>
 <body>
@@ -87,6 +100,7 @@
 </header>
 
 <main>
+  <div class="alerts" id="alerts"></div>
   <div class="grid kpis" id="kpis"></div>
 
   <div class="grid cols">
@@ -116,6 +130,10 @@
   <section class="card" style="margin-top:14px">
     <h2>AI Gateway (single LLM egress &middot; routing, cache, fallback, cost)</h2>
     <div class="grid kpis" id="gateway" style="margin-bottom:0"></div>
+    <div style="margin-top:14px">
+      <div class="label" style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.6px">LLM latency (recent calls, ms)</div>
+      <div class="spark" id="spark"></div>
+    </div>
   </section>
 </main>
 
@@ -224,13 +242,30 @@ function renderGateway(g) {
   ].join("");
 }
 
+function renderAlerts(alerts) {
+  const el = $("#alerts");
+  if (!alerts.length) { el.innerHTML = `<div class="ok-banner">✓ All clear — no alerts firing.</div>`; return; }
+  el.innerHTML = alerts.map((a) =>
+    `<div class="alert ${a.severity}"><span class="tag">${a.severity}</span>
+      <span>${a.message}</span></div>`).join("");
+}
+
+function renderSpark(recent) {
+  const vals = recent.map((r) => r.latencyMs || 0);
+  const max = Math.max(1, ...vals);
+  $("#spark").innerHTML = vals.length
+    ? vals.map((v) => `<span style="height:${Math.max(2, v / max * 38)}px" title="${v.toFixed(2)} ms"></span>`).join("")
+    : `<span style="opacity:.3"></span>`;
+}
+
 async function refresh() {
   try {
-    const [m, findings, approvals, health, gw] = await Promise.all([
-      api("/metrics"), api("/findings"), api("/approvals"), api("/health"), api("/gateway/metrics"),
+    const [m, findings, approvals, health, gw, al, ts] = await Promise.all([
+      api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
+      api("/gateway/metrics"), api("/observability/alerts"), api("/observability/timeseries"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
-    renderGateway(gw);
+    renderGateway(gw); renderAlerts(al.alerts); renderSpark(ts.recentLlm);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
       `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;

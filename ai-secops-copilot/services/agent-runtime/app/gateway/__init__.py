@@ -52,11 +52,25 @@ def build_gateway(settings: Settings) -> Gateway:
         ),
         DeterministicProvider(),
     ]
+    # Observability seam (Day 12): every completion feeds the time-series + trace ring.
+    observer = None
+    tracer = None
+    try:
+        from ..observability import get_timeseries, get_tracer
+
+        ts = get_timeseries()
+        observer = lambda event: ts.record_llm(**event)  # noqa: E731 - tiny adapter
+        tracer = get_tracer(settings)
+    except Exception:  # noqa: BLE001 - observability is best-effort; egress still works
+        pass
+
     return Gateway(
         providers,
         router=Router(),
         cache=SemanticCache(similarity=settings.llm_cache_similarity),
         cache_enabled=settings.llm_cache_enabled,
+        observer=observer,
+        tracer=tracer,
     )
 
 
