@@ -6,6 +6,9 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /metrics                        - platform KPIs (automation rate, latency, ...)
   * POST /demo/seed                      - ingest bundled sample reports (one-click demo)
   * POST /demo/reset                     - clear in-memory state (fresh demo slate)
+  * GET  /graph                          - compiled LangGraph structure (nodes + mermaid)
+  * POST /graph/analyze                  - run via the compiled graph (HITL interrupt)
+  * POST /graph/resume/{thread_id}       - resume a paused run (approve/reject)
   * GET  /health                         - liveness + config snapshot
   * POST /governance/preview             - confidence -> disposition (no LLM)
   * POST /analyze                        - full pipeline: Finding -> analysis ->
@@ -40,6 +43,7 @@ from . import __version__
 from .config import get_settings
 from .domain import Action
 from .governance import evaluate as governance_evaluate
+from .graph import GraphRunner
 from .ingestion import normalize
 from .metrics import compute_metrics, project_findings
 from .pipeline import run_pipeline
@@ -66,6 +70,20 @@ _approvals = ApprovalStore()
 _escalations = EscalationQueue()
 _dead_letter = DeadLetterQueue()
 _audit = AuditLog()
+
+
+def _make_graph_runner() -> GraphRunner | None:
+    """Build the compiled-LangGraph runner; None if LangGraph isn't installed."""
+    try:
+        return GraphRunner(
+            provider=_provider, approvals=_approvals,
+            escalations=_escalations, dead_letter=_dead_letter,
+        )
+    except Exception:  # noqa: BLE001 - graph is optional; inline pipeline still works
+        return None
+
+
+_graph_runner = _make_graph_runner()
 
 
 @app.get("/", include_in_schema=False)
@@ -101,6 +119,7 @@ def health() -> dict:
             "suggestThreshold": settings.suggest_threshold,
             "suppressAutoThreshold": settings.suppress_auto_threshold,
         },
+        "orchestration": "langgraph" if _graph_runner is not None else "inline",
     }
 
 
@@ -307,14 +326,66 @@ def demo_reset() -> dict:
     This resets the demo to a clean slate (no persistence, so a process restart does
     the same). Idempotent ticket creation means re-seeding never duplicates tickets.
     """
-    global _provider, _approvals, _escalations, _dead_letter, _audit
+    global _provider, _approvals, _escalations, _dead_letter, _audit, _graph_runner
     settings = get_settings()
     _provider = get_ticket_provider(settings)
     _approvals = ApprovalStore()
     _escalations = EscalationQueue()
     _dead_letter = DeadLetterQueue()
     _audit = AuditLog()
+    _graph_runner = _make_graph_runner()  # rebind to the fresh stores
     return {"status": "reset"}
+
+
+class GraphResumeRequest(BaseModel):
+    approved: bool
+
+
+@app.get("/graph", include_in_schema=True)
+def graph_structure() -> dict:
+    """Introspect the compiled LangGraph (nodes + mermaid) — the orchestration story."""
+    if _graph_runner is None:
+        raise HTTPException(status_code=503, detail="LangGraph is not installed.")
+    return {"nodes": _graph_runner.nodes(), "mermaid": _graph_runner.mermaid()}
+
+
+@app.post("/graph/analyze")
+def graph_analyze(req: AnalyzeRequest) -> dict:
+    """Run a finding through the compiled graph (conditional routing + HITL interrupt).
+
+    Returns a completed result, or ``status=awaiting_approval`` with a ``threadId`` to
+    resume via ``POST /graph/resume/{thread_id}`` — durable human-in-the-loop.
+    """
+    if _graph_runner is None:
+        raise HTTPException(status_code=503, detail="LangGraph is not installed.")
+    started = time.perf_counter()
+    out = _graph_runner.analyze(
+        req.finding.model_dump(), client=None, retriever=_retriever
+    )
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    decision = out.get("decision") or {}
+    if out["status"] == "completed":
+        _audit.record(decision, out["action"]["outcome"], actor="system", latency_ms=latency_ms)
+    else:
+        _audit.record(decision, "pending_approval", actor="system", latency_ms=latency_ms)
+    return out
+
+
+@app.post("/graph/resume/{thread_id}")
+def graph_resume(thread_id: str, req: GraphResumeRequest) -> dict:
+    """Resume a paused graph run with the human's approve/reject (checkpointed HITL)."""
+    if _graph_runner is None:
+        raise HTTPException(status_code=503, detail="LangGraph is not installed.")
+    try:
+        out = _graph_runner.resume(thread_id, approved=req.approved)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"No paused run for thread {thread_id}"
+        ) from None
+    decision = out.get("decision") or {}
+    if out.get("action"):
+        _audit.record(decision, out["action"]["outcome"], actor="human")
+    return out
 
 
 @app.get("/findings")

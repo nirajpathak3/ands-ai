@@ -20,11 +20,12 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 8 — demo milestone: operations dashboard)
+## Status (Day 9 — compiled LangGraph: routing + checkpointed HITL)
 
 | Piece | State |
 | --- | --- |
-| **Operations dashboard** (`GET /` → `/dashboard`, KPIs + findings + approvals, one-click seed/reset) | ✅ implemented + tested |
+| **Compiled LangGraph** (conditional routing, checkpointer, human-approval **interrupt/resume**) | ✅ implemented + tested |
+| Operations dashboard (`GET /` → `/dashboard`, KPIs + findings + approvals, one-click seed/reset) | ✅ implemented + tested |
 | **Findings view** (`GET /findings`: current-state, deduped by hash, linked ticket) | ✅ implemented + tested |
 | **Metrics** (`GET /metrics`: automation/approval/escalation rates, latency, decision events) | ✅ implemented + tested |
 | Governance policy engine (asymmetric auto-suppress bar, reason codes) | ✅ implemented + unit-tested |
@@ -35,8 +36,8 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `GET /dashboard`, `GET /metrics`, `GET /findings`, `POST /demo/seed`, `POST /demo/reset`, `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, `GET /audit`, approvals/tickets/escalations/deadletter | ✅ working |
-| LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
+| `GET /graph`, `POST /graph/analyze`, `POST /graph/resume/{thread_id}`, `GET /dashboard`, `GET /metrics`, `GET /findings`, `POST /demo/seed`, `POST /demo/reset`, `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, `GET /audit`, approvals/tickets/escalations/deadletter | ✅ working |
+| LangGraph wiring (`app/graph/`) | ✅ compiled graph + runner (interrupt/resume, MemorySaver) |
 | pgvector retrieval backend (ADR-002) | ⏳ seam in place (offline lexical default) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
 
@@ -102,6 +103,27 @@ curl -X POST localhost:8088/governance/preview -H "content-type: application/jso
   -d '{"confidence": 0.95, "recommendedAction": "create_ticket"}'   # -> auto_execute
 ```
 
+### Compiled LangGraph (conditional routing + checkpointed HITL)
+
+`run_pipeline` runs the same nodes inline (dependency-free fallback); the **compiled
+LangGraph** adds explicit state, conditional routing on the disposition, a checkpointer,
+and a real **human-approval interrupt** that pauses a run and resumes it in a *later*
+request (durable HITL):
+
+```bash
+curl localhost:8088/graph                 # nodes + mermaid of the compiled graph
+
+# Medium finding -> the graph PAUSES at the approval gate and returns a threadId:
+curl -X POST localhost:8088/graph/analyze -H "content-type: application/json" -d '{
+  "finding": {"id":"F-023","ruleId":"cleartext-transmission","title":"HTTP","message":"x",
+  "file":"app/clients/partner.py","cwe":"CWE-319","scannerSeverity":"WARNING",
+  "codeSnippet":"PARTNER_API=\"http://partner.example.com\""}}'   # -> awaiting_approval
+
+# Resume that paused run with the human's decision (checkpointed by thread_id):
+curl -X POST localhost:8088/graph/resume/<thread_id> \
+  -H "content-type: application/json" -d '{"approved": true}'      # -> ticket_created
+```
+
 ## Test
 
 ```bash
@@ -127,9 +149,9 @@ app/
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail
 ├─ config.py        # env-driven settings
-├─ main.py          # FastAPI app (/dashboard, /metrics, /demo/seed, /analyze, /ingest, ...)
+├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)
 ├─ static/          # single-page operations dashboard (served at /dashboard)
-└─ graph/           # LangGraph: state, nodes, build
+└─ graph/           # LangGraph: state, nodes, build (compiled graph), runner (HITL+checkpoint)
 tests/              # unit + end-to-end tests
 ```
 

@@ -23,9 +23,14 @@ gives citations/grounding, and is cheaper. Fine-tuning would be stale and unveri
 
 ### ADR-004 — LangGraph for orchestration
 **Decision:** Model the flow as a LangGraph graph (Finding Analysis Node → Ticket Decision Node → Governance Gate).
+Realized Day 9 as a compiled `StateGraph` with conditional routing on the disposition, a checkpointer
+(MemorySaver now, Postgres Day 10), and a real **interrupt** at the approval gate so a run can pause and
+**resume in a later request** keyed by `thread_id`. Runtime deps (LLM client, retriever) are injected via
+graph **config**, never written to checkpointed state, so the graph serializes cleanly.
 **Why:** Explicit state, conditional routing, checkpointing, and human-approval interrupts map directly to a
 governed agentic workflow. Reuses the orchestration concepts from the multi-agent platform (one codebase).
-**Tradeoff:** A learning curve vs plain functions; mitigated by building the walking skeleton first, then refactoring.
+**Tradeoff:** A learning curve vs plain functions; mitigated by building the walking skeleton first, then
+upgrading. The dependency-free `run_pipeline` runs the same node functions as a fallback (one source of truth).
 
 ### ADR-005 — Confidence-gated automation (two thresholds → three dispositions)
 **Decision:** Auto-execute above an autonomy threshold; require human approval in the middle band; escalate below.

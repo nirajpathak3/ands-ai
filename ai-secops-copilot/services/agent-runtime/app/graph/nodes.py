@@ -27,7 +27,24 @@ def ingest_node(state: GraphState) -> GraphState:
     return state
 
 
-def finding_analysis_node(state: GraphState) -> GraphState:
+def _from_state_or_config(state: GraphState, config, key: str):
+    """Resolve a runtime dependency (LLM client / retriever) from state or config.
+
+    The inline pipeline injects via ``state['_<key>']``; the compiled graph injects via
+    ``config['configurable'][<key>]`` so the object is NOT written to checkpointed state
+    (LangGraph would fail to serialize an LLM client / retriever otherwise).
+    """
+    value = state.get(f"_{key}")
+    if value is not None:
+        return value
+    if config:
+        return (config.get("configurable") or {}).get(key)
+    return None
+
+
+def finding_analysis_node(state: GraphState, config=None) -> GraphState:  # noqa: ANN001
+    # `config` is intentionally untyped: under `from __future__ import annotations`
+    # a non-RunnableConfig annotation makes LangGraph skip config injection.
     """Analyze the finding into {severity, confidence, reason, recommendedAction}.
 
     Calls the LLM client (DeterministicLLM today; the AI Gateway on Day 11) and
@@ -38,7 +55,7 @@ def finding_analysis_node(state: GraphState) -> GraphState:
     """
     settings = get_settings()
     finding = state.get("finding", {})
-    client = state.get("_client") or get_default_client()
+    client = _from_state_or_config(state, config, "client") or get_default_client()
 
     # RAG: retrieve OWASP/CWE guidance to ground the analysis and cite the decision
     # (ADR-001). The retrieved text is passed to the LLM prompt as TRUSTED context,
@@ -46,7 +63,7 @@ def finding_analysis_node(state: GraphState) -> GraphState:
     # client decides from rules; the citations still surface the grounding, and the
     # real LLM (Day 11) consumes the context via prompts.build_analysis_messages.
     if settings.rag_enabled:
-        retriever = state.get("_retriever") or get_default_retriever()
+        retriever = _from_state_or_config(state, config, "retriever") or get_default_retriever()
         if retriever is not None:
             try:
                 hits = retriever.retrieve_for_finding(finding, k=settings.rag_top_k)

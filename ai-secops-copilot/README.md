@@ -189,12 +189,25 @@ Re-running the demo therefore updates findings in place — it never duplicates 
 links — which is also the idempotency guarantee made visible (events grow, findings/tickets
 don't). A **Reset** button clears the in-memory state for a fresh run.
 
+**Day 9 complete — compiled LangGraph (routing + checkpointed HITL):** the walking-skeleton
+nodes are now wired into a real **compiled LangGraph** (`app/graph/build.py`, driven by
+`GraphRunner`) with explicit `GraphState`, **conditional routing** on the governance
+disposition (auto-execute / escalate → `execute`; human-approval → `await_approval`), a
+**MemorySaver checkpointer**, and a genuine **human-in-the-loop interrupt**: a medium-confidence
+finding *pauses* the graph (`POST /graph/analyze` → `awaiting_approval` + `threadId`) and is
+*resumed in a later request* (`POST /graph/resume/{thread_id}` with approve/reject) — durable
+HITL, not a synchronous block. `GET /graph` returns the nodes + mermaid. The LLM client and
+retriever are injected via LangGraph **config** (not checkpointed state) so the graph serializes
+cleanly. The dependency-free `run_pipeline` remains a fallback running the *same* node functions
+(one source of truth for the reasoning); `/health` reports the active orchestration
+(`langgraph` vs `inline`).
+
 Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
 governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
 
-**Next — Day 9:** upgrade the in-line nodes to the full **LangGraph** graph (explicit state,
-conditional routing, human-approval interrupts).
+**Next — Day 10:** persistence — move approvals/audit/checkpoints off in-memory stores
+(Postgres-backed checkpointer + durable approval/audit tables).
 
 ## Documentation
 

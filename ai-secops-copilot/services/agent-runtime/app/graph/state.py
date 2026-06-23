@@ -21,6 +21,9 @@ class GraphState(TypedDict, total=False):
     # Produced by the Ticket Decision Node + Governance Gate
     decision: dict[str, Any]     # TicketDecision as a dict
 
+    # Produced by the action stage (execute / approval / escalate nodes, Day 9)
+    action: dict[str, Any]       # ActionResult as a dict (outcome + ticket)
+
     # Produced by the RAG layer (Day 5)
     rag_context: str | None      # retrieved OWASP/CWE context (for the LLM prompt)
     citations: list[dict[str, Any]]  # retrieved knowledge references (grounding)
