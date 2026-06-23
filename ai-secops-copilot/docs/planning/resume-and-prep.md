@@ -97,22 +97,27 @@ Stack: TypeScript · NestJS · LangGraph (in progress) · Redis
 
 ### Work Experience
 
-**Backend Architect — Orangebits / Ox Security** | Oct 2023 – May 2026
+**Senior Backend Architect — Orangebits Software Technologies** | Oct 2023 – May 2026
+*Deployed as backend architect to Ox Security (enterprise ASPM platform)*
 
-Ox Security builds an Application Security Posture Management platform. I was the backend
-architect responsible for the orchestration and integration layer.
+Ox Security builds one of the leading Application Security Posture Management platforms —
+helping enterprise security teams correlate and act on findings across their entire AppSec
+toolchain. I was embedded with their engineering team as the backend architect on the core
+platform, responsible for orchestration, integrations, and API platform evolution.
 
-- Distributed Orchestration: designed the orchestration services that process and correlate
-  security findings across 100+ vendor integrations — event-driven, BullMQ-backed, built for
+- Distributed Orchestration: designed the event-driven orchestration layer that processes
+  security findings across 100+ vendor integrations — NestJS, Redis, BullMQ, built for
   backpressure, idempotency, and retry at scale
-- Federated API Platform: architected and evolved the Apollo Federation v2 layer (6+
-  microservice domains), enabling teams to own their schemas while the platform composes them
+- Federated API Platform: architected and evolved the Apollo Federation v2 layer spanning 6+
+  microservice domains, letting teams own their schemas independently while the platform
+  composes them at the gateway
 - Enterprise Integrations: built resilient adapters for Jira, ServiceNow, Azure Boards, GitHub,
-  and security tool ecosystems — async, rate-limited, fault-tolerant
-- Observability: extended Datadog and OpenSearch observability, introduced distributed tracing
-  and SLO-based reliability practices
-- Applied LangChain/LangGraph-based automation patterns to engineering tooling; led the
-  team toward structured, evaluation-aware AI usage
+  and security tooling ecosystems — async, rate-limited, fault-tolerant, with structured
+  error recovery
+- Observability: extended Datadog and OpenSearch observability; introduced distributed
+  tracing and SLO-based reliability practices across the platform
+- Applied LangChain/LangGraph-based automation patterns to internal engineering tooling;
+  evaluated agentic workflows for developer productivity use cases
 
 **Senior Backend Developer — Svastir Technology Services** | Jul 2022 – Jul 2023
 
@@ -188,8 +193,10 @@ sounds like you're drawing boxes, not shipping.
 **Skills section:** Removed "OpenAI Realtime APIs" — it's not in the Copilot yet so you'd
 struggle to back it up. Don't claim it until the project uses it.
 
-**Ox bullet:** Softened the AI line to "Applied LangChain/LangGraph-based automation patterns"
-— more honest and still strong.
+**Ox bullet:** Confirmed no separate NDA signed — Ox Security can be named freely on resume,
+LinkedIn, Naukri, and in interviews. Format: employer line = Orangebits, deployed-to line = Ox
+Security. This is standard for staffing/deployment arrangements. Softened AI line to
+"Applied LangChain/LangGraph-based automation patterns" — more honest and still strong.
 
 ---
 
@@ -210,10 +217,11 @@ Building production-grade AI platforms | Orchestration · RAG · HITL · Observa
 I've been a backend architect for most of the last 17 years. APIs, orchestration, integrations,
 observability — the systems that have to work even at 2am when everything else is on fire.
 
-Most recently at Ox Security, I was the architect on their ASPM platform — the part that takes
-security findings from 100+ scanning tools and does something useful with them. Lots of
-event-driven orchestration, Jira/ServiceNow integrations, and the usual reliability work that
-doesn't show up in demos but keeps things running in production.
+Most recently I was the backend architect at Orangebits, deployed to Ox Security — they build
+one of the leading ASPM platforms, helping enterprises correlate and act on security findings
+across their entire toolchain. My work was on the orchestration and integration layer: event-driven
+processing across 100+ scanning integrations, federated APIs, Jira/ServiceNow, and the reliability
+work that doesn't show up in demos but keeps things running in production.
 
 Lately I've been going deep on AI platform engineering. Not because I wanted to build chatbots —
 because agentic systems have the exact same hard problems I've been solving for years: how do
@@ -268,8 +276,8 @@ Integrations | 17+ Years
 ### Profile summary
 
 17+ years in backend platform engineering — distributed systems, workflow orchestration,
-enterprise integrations (Jira, ServiceNow, GitHub), and observability. At Ox Security I
-architected the backend for a large-scale ASPM platform: event-driven orchestration across
+enterprise integrations (Jira, ServiceNow, GitHub), and observability. Deployed to Ox Security
+(via Orangebits) as backend architect on their ASPM platform: event-driven orchestration across
 100+ security integrations, federated APIs, and reliability engineering at scale.
 
 Currently building AI Security Operations Copilot — LangGraph agent pipeline with RAG

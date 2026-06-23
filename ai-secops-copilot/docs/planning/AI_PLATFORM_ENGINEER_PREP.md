@@ -540,3 +540,26 @@ Copilot description, mentoring + cooking naturally at the end. One post draft fo
 8. Career narrative diagram (how obs-agent + veho patterns flow into Copilot)
 
 All conversations 13–16 logged to this file.
+
+## Conversation 17 — NDA check: can Ox Security be named publicly?
+
+**Question:** Offer letter mentions NDA but Niraj never signed a separate NDA document.
+Can Ox Security be named on resume/LinkedIn/Naukri?
+
+**Answer: Yes — confirmed safe to name.**
+- Offer letter references a separate NDA to be signed at joining — no separate NDA was signed.
+- Offer letter alone does not restrict naming clients publicly.
+- Non-compete clause only restricts competing business activity, explicitly allows employment in other IT firms.
+- What's restricted regardless: Ox Security source code, internal schemas, customer data, IP — none of
+  which appear in the Copilot repo (built clean-room from public standards).
+
+**Resume format confirmed:**
+- Employer line: Orangebits Software Technologies (India) Pvt. Ltd.
+- Sub-line: "Deployed as backend architect to Ox Security (enterprise ASPM platform)"
+- This is standard for staffing/deployment arrangements in Indian IT industry.
+
+**Updated in `resume-and-prep.md`:**
+- Ox entry reformatted with proper employer/client structure
+- LinkedIn About section updated to name Ox Security naturally
+- Naukri summary updated to mention Ox Security
+- Verbal interview answer unchanged (always fine to name in private conversation)
