@@ -20,19 +20,21 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 7 — governance hardening + audit trail)
+## Status (Day 8 — demo milestone: operations dashboard)
 
 | Piece | State |
 | --- | --- |
-| **Governance policy engine** (asymmetric auto-suppress bar, reason codes) | ✅ implemented + unit-tested |
-| **Audit trail** (`GET /audit`: who/what/why per decision) | ✅ implemented + tested |
+| **Operations dashboard** (`GET /` → `/dashboard`, KPIs + audit + approvals, one-click seed) | ✅ implemented + tested |
+| **Metrics** (`GET /metrics`: automation/approval/escalation rates, latency) | ✅ implemented + tested |
+| Governance policy engine (asymmetric auto-suppress bar, reason codes) | ✅ implemented + unit-tested |
+| Audit trail (`GET /audit`: who/what/why per decision) | ✅ implemented + tested |
 | Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract | ✅ implemented + tested |
 | RAG: OWASP/CWE corpus + lexical retriever + citations | ✅ implemented + tested |
 | Finding analysis (deterministic LLM stand-in) + structured-output validation | ✅ implemented + tested |
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, **`GET /audit`**, approvals/tickets/escalations/deadletter | ✅ working |
+| `GET /dashboard`, `GET /metrics`, `POST /demo/seed`, `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, `GET /audit`, approvals/tickets/escalations/deadletter | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
 | pgvector retrieval backend (ADR-002) | ⏳ seam in place (offline lexical default) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
@@ -116,11 +118,13 @@ app/
 ├─ analysis.py      # deterministic finding analysis (the offline LLM stand-in)
 ├─ prompts.py       # analysis prompt + prompt-injection isolation (ADR-011)
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
-├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter
+├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter/audit
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
+├─ metrics.py       # dashboard KPI aggregation over the audit trail
 ├─ config.py        # env-driven settings
-├─ main.py          # FastAPI app (/analyze, /ingest, /knowledge/search, /approvals, /tickets, ...)
+├─ main.py          # FastAPI app (/dashboard, /metrics, /demo/seed, /analyze, /ingest, ...)
+├─ static/          # single-page operations dashboard (served at /dashboard)
 └─ graph/           # LangGraph: state, nodes, build
 tests/              # unit + end-to-end tests
 ```

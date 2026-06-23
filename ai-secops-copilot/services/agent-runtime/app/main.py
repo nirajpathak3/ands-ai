@@ -1,6 +1,10 @@
 """FastAPI entrypoint for the agent runtime.
 
 Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in):
+  * GET  /                               - redirect to the operations dashboard
+  * GET  /dashboard                      - single-page operations dashboard (Day 8)
+  * GET  /metrics                        - platform KPIs (automation rate, latency, ...)
+  * POST /demo/seed                      - ingest bundled sample reports (one-click demo)
   * GET  /health                         - liveness + config snapshot
   * POST /governance/preview             - confidence -> disposition (no LLM)
   * POST /analyze                        - full pipeline: Finding -> analysis ->
@@ -22,7 +26,12 @@ Run locally:
 
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from . import __version__
@@ -30,11 +39,16 @@ from .config import get_settings
 from .domain import Action
 from .governance import evaluate as governance_evaluate
 from .ingestion import normalize
+from .metrics import compute_metrics
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
 from .rag import get_retriever
 from .schemas import AnalyzeRequest, Finding
 from .ticketing import ApprovalStore, AuditLog, DeadLetterQueue, EscalationQueue
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SAMPLES_DIR = _REPO_ROOT / "datasets" / "samples"
+_DASHBOARD_HTML = Path(__file__).resolve().parent / "static" / "dashboard.html"
 
 app = FastAPI(
     title="AI Security Operations Copilot - Agent Runtime",
@@ -50,6 +64,19 @@ _approvals = ApprovalStore()
 _escalations = EscalationQueue()
 _dead_letter = DeadLetterQueue()
 _audit = AuditLog()
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard() -> HTMLResponse:
+    """Single-page operations dashboard (Day 8 demo milestone)."""
+    if not _DASHBOARD_HTML.exists():
+        raise HTTPException(status_code=404, detail="Dashboard asset missing.")
+    return HTMLResponse(_DASHBOARD_HTML.read_text(encoding="utf-8"))
 
 
 @app.get("/health")
@@ -106,6 +133,7 @@ def governance_preview(req: GovernancePreviewRequest) -> dict:
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest) -> dict:
     """Run a finding through the full walking skeleton and execute the decision."""
+    started = time.perf_counter()
     out = run_pipeline(
         req.finding.model_dump(),
         provider=_provider,
@@ -114,7 +142,10 @@ def analyze(req: AnalyzeRequest) -> dict:
         dead_letter=_dead_letter,
         retriever=_retriever,
     )
-    _audit.record(out["decision"], out["action"]["outcome"], actor="system")
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    _audit.record(
+        out["decision"], out["action"]["outcome"], actor="system", latency_ms=latency_ms
+    )
     return out
 
 
@@ -145,12 +176,14 @@ def ingest(req: IngestRequest) -> dict:
         except ValidationError as exc:
             skipped.append({"id": item.get("id"), "errors": exc.error_count()})
             continue
+        started = time.perf_counter()
         out = run_pipeline(
             finding.model_dump(), provider=_provider, approvals=_approvals,
             escalations=_escalations, dead_letter=_dead_letter, retriever=_retriever,
         )
+        latency_ms = (time.perf_counter() - started) * 1000.0
         outcome = out["action"]["outcome"]
-        _audit.record(out["decision"], outcome, actor="system")
+        _audit.record(out["decision"], outcome, actor="system", latency_ms=latency_ms)
         summary[outcome] = summary.get(outcome, 0) + 1
         results.append({
             "findingId": out["decision"].get("findingId"),
@@ -231,6 +264,37 @@ def list_tickets() -> dict:
 def list_escalations() -> dict:
     items = _escalations.list_all()
     return {"count": len(items), "escalations": items}
+
+
+@app.get("/metrics")
+def metrics() -> dict:
+    """Platform KPIs for the dashboard (derived from the audit trail + stores)."""
+    return compute_metrics(
+        _audit.list_all(),
+        tickets=len(_provider.all()),
+        pending_approvals=len(_approvals.list_pending()),
+        escalations=len(_escalations.list_all()),
+        dead_letters=len(_dead_letter.list_all()),
+    )
+
+
+@app.post("/demo/seed")
+def demo_seed() -> dict:
+    """One-click demo: ingest the bundled Semgrep + SARIF sample reports.
+
+    Drives the memorable walkthrough — a critical SQLi auto-creates a ticket while a
+    medium finding waits for human approval — without any external scanner or creds.
+    """
+    seeded: dict[str, dict] = {}
+    for name, fmt in (("semgrep-sample.json", "semgrep"), ("sarif-sample.json", "sarif")):
+        path = _SAMPLES_DIR / name
+        if not path.exists():
+            continue
+        report = json.loads(path.read_text(encoding="utf-8"))
+        seeded[name] = ingest(IngestRequest(format=fmt, report=report))
+    if not seeded:
+        raise HTTPException(status_code=404, detail="No sample reports found to seed.")
+    return {"seeded": list(seeded.keys()), "reports": seeded}
 
 
 @app.get("/audit")

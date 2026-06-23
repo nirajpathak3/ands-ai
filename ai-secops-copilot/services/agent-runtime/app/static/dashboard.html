@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Security Operations Copilot</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #131a2e; --panel-2: #1a2440; --line: #25304f;
+    --text: #e7ecf5; --muted: #93a0bd; --accent: #5b8cff; --accent-2: #36d399;
+    --warn: #fbbf24; --danger: #f87171; --chip: #1f2b4a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 80% -10%, #182246 0%, var(--bg) 55%);
+    color: var(--text); min-height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 18px 28px; border-bottom: 1px solid var(--line);
+    background: rgba(11,16,32,.7); backdrop-filter: blur(6px); position: sticky; top: 0; z-index: 5;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent-2);
+    box-shadow: 0 0 12px var(--accent-2); }
+  .brand h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  .brand small { color: var(--muted); display: block; font-size: 11px; }
+  .actions { display: flex; gap: 10px; align-items: center; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 9px 14px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  button:disabled { opacity: .55; cursor: default; }
+  main { padding: 22px 28px 60px; max-width: 1180px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .kpi .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+  .kpi .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .cols { grid-template-columns: 1.4fr 1fr; align-items: start; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    margin: 2px 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; background: var(--chip); border: 1px solid var(--line); }
+  .chip.auto_execute { color: #c7f9e5; background: #103a2e; border-color: #1c6b50; }
+  .chip.human_approval { color: #fde9bf; background: #3a2f10; border-color: #6b561c; }
+  .chip.escalate { color: #fbd0d0; background: #3a1414; border-color: #6b2020; }
+  .sev.critical, .sev.high { color: var(--danger); font-weight: 700; }
+  .sev.medium { color: var(--warn); }
+  .sev.low, .sev.info { color: var(--muted); }
+  .row-actions button { padding: 5px 10px; font-size: 12px; }
+  .empty { color: var(--muted); padding: 18px 10px; text-align: center; }
+  .bar { height: 8px; border-radius: 6px; background: var(--panel-2); overflow: hidden; display: flex; }
+  .bar > span { display: block; height: 100%; }
+  .legend { display: flex; gap: 14px; margin-top: 8px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; }
+  #toast { position: fixed; right: 20px; bottom: 20px; background: var(--panel-2);
+    border: 1px solid var(--line); padding: 12px 16px; border-radius: 10px; opacity: 0;
+    transition: opacity .25s; pointer-events: none; max-width: 360px; }
+  #toast.show { opacity: 1; }
+  .pill { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="dot"></span>
+    <div>
+      <h1>AI Security Operations Copilot</h1>
+      <small id="env">agent runtime &middot; loading&hellip;</small>
+    </div>
+  </div>
+  <div class="actions">
+    <span class="pill" id="provider"></span>
+    <button class="ghost" id="refresh">Refresh</button>
+    <button id="seed">Run demo (ingest samples)</button>
+  </div>
+</header>
+
+<main>
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="grid cols">
+    <section class="card">
+      <h2>Recent decisions (audit trail)</h2>
+      <table>
+        <thead><tr><th>Finding</th><th>Sev</th><th>Action</th><th>Disposition</th>
+          <th>Conf</th><th>By</th><th>ms</th></tr></thead>
+        <tbody id="audit"><tr><td class="empty" colspan="7">No decisions yet — run the demo.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Autonomy split</h2>
+      <div class="bar" id="split"></div>
+      <div class="legend">
+        <span><i style="background:#1c6b50"></i>Auto-execute</span>
+        <span><i style="background:#6b561c"></i>Human approval</span>
+        <span><i style="background:#6b2020"></i>Escalate</span>
+      </div>
+
+      <h2 style="margin-top:22px">Pending approvals (HITL)</h2>
+      <div id="approvals"><div class="empty">Nothing waiting.</div></div>
+    </section>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let TOAST_T;
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(TOAST_T); TOAST_T = setTimeout(() => t.classList.remove("show"), 2600);
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.json();
+}
+const pct = (x) => (x * 100).toFixed(0) + "%";
+
+function kpiCard(label, value, sub) {
+  return `<div class="card kpi"><div class="label">${label}</div>
+    <div class="value">${value}</div><div class="sub">${sub || ""}</div></div>`;
+}
+
+function renderKpis(m) {
+  $("#kpis").innerHTML = [
+    kpiCard("Findings processed", m.findingsProcessed, "since runtime start"),
+    kpiCard("Tickets created", m.ticketsCreated, "idempotent"),
+    kpiCard("Automation rate", pct(m.rates.automation), "acted without a human"),
+    kpiCard("Approval rate", pct(m.rates.approval), `${m.pendingApprovals} waiting`),
+    kpiCard("Escalation rate", pct(m.rates.escalation), `${m.escalations} escalated`),
+    kpiCard("Avg latency", m.latencyMs.mean + " ms", "p95 " + m.latencyMs.p95 + " ms"),
+  ].join("");
+
+  const d = m.byDisposition || {};
+  const a = d.auto_execute || 0, h = d.human_approval || 0, e = d.escalate || 0;
+  const tot = a + h + e || 1;
+  $("#split").innerHTML =
+    `<span style="width:${a/tot*100}%;background:#1c6b50"></span>` +
+    `<span style="width:${h/tot*100}%;background:#6b561c"></span>` +
+    `<span style="width:${e/tot*100}%;background:#6b2020"></span>`;
+}
+
+function renderAudit(records) {
+  const rows = records.slice().reverse().slice(0, 12);
+  if (!rows.length) {
+    $("#audit").innerHTML = `<tr><td class="empty" colspan="7">No decisions yet — run the demo.</td></tr>`;
+    return;
+  }
+  $("#audit").innerHTML = rows.map((r) => `
+    <tr>
+      <td class="mono">${r.findingId || r.findingHash.slice(0, 8)}</td>
+      <td class="sev ${r.severity}">${r.severity}</td>
+      <td>${r.recommendedAction}</td>
+      <td><span class="chip ${r.disposition}">${r.disposition.replace("_", " ")}</span></td>
+      <td>${(r.confidence * 100).toFixed(0)}%</td>
+      <td>${r.actor}</td>
+      <td class="mono">${r.latencyMs}</td>
+    </tr>`).join("");
+}
+
+function renderApprovals(pending) {
+  if (!pending.length) { $("#approvals").innerHTML = `<div class="empty">Nothing waiting.</div>`; return; }
+  $("#approvals").innerHTML = pending.map((p) => {
+    const a = p.analysis || {};
+    return `<div class="card" style="margin-bottom:10px;background:var(--panel-2)">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+        <div>
+          <div><b>${p.findingId || p.findingHash.slice(0, 8)}</b>
+            <span class="sev ${a.severity}">${a.severity || ""}</span></div>
+          <div class="pill">${a.reason || ""}</div>
+        </div>
+        <div class="row-actions">
+          <button data-approve="${p.findingHash}">Approve</button>
+          <button class="ghost" data-reject="${p.findingHash}">Reject</button>
+        </div>
+      </div></div>`;
+  }).join("");
+  document.querySelectorAll("[data-approve]").forEach((b) =>
+    b.onclick = () => act("approve", b.getAttribute("data-approve")));
+  document.querySelectorAll("[data-reject]").forEach((b) =>
+    b.onclick = () => act("reject", b.getAttribute("data-reject")));
+}
+
+async function act(kind, hash) {
+  try {
+    await api(`/approvals/${hash}/${kind}`, { method: "POST" });
+    toast(kind === "approve" ? "Approved — ticket created." : "Rejected.");
+    refresh();
+  } catch (e) { toast("Error: " + e.message); }
+}
+
+async function refresh() {
+  try {
+    const [m, audit, approvals, health] = await Promise.all([
+      api("/metrics"), api("/audit"), api("/approvals"), api("/health"),
+    ]);
+    renderKpis(m); renderAudit(audit.records); renderApprovals(approvals.pending);
+    $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
+    $("#provider").textContent =
+      `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"}`;
+  } catch (e) { toast("Error: " + e.message); }
+}
+
+$("#refresh").onclick = refresh;
+$("#seed").onclick = async () => {
+  const b = $("#seed"); b.disabled = true; b.textContent = "Seeding…";
+  try { await api("/demo/seed", { method: "POST" }); toast("Sample reports ingested."); }
+  catch (e) { toast("Error: " + e.message); }
+  finally { b.disabled = false; b.textContent = "Run demo (ingest samples)"; refresh(); }
+};
+
+refresh();
+</script>
+</body>
+</html>

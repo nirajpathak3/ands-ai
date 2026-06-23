@@ -199,6 +199,7 @@ class AuditRecord:
     reasonCode: str | None
     outcome: str
     actor: str  # "system" (autonomous) | "human" (approval/rejection)
+    latencyMs: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -211,7 +212,12 @@ class AuditLog:
         self._records: list[AuditRecord] = []
 
     def record(
-        self, decision: Mapping[str, object], outcome: str, *, actor: str = "system"
+        self,
+        decision: Mapping[str, object],
+        outcome: str,
+        *,
+        actor: str = "system",
+        latency_ms: float = 0.0,
     ) -> AuditRecord:
         analysis = decision.get("analysis") or {}
         analysis = analysis if isinstance(analysis, Mapping) else {}
@@ -226,6 +232,7 @@ class AuditLog:
             reasonCode=(str(decision["reasonCode"]) if decision.get("reasonCode") else None),
             outcome=outcome,
             actor=actor,
+            latencyMs=round(float(latency_ms), 2),
         )
         self._records.append(rec)
         return rec

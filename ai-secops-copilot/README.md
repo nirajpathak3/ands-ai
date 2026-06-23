@@ -171,12 +171,23 @@ auto-threshold **sweep** showing the autonomy/safety trade-off. The regression g
 also enforces `auto_action_accuracy ≥ 0.99` (no wrong autonomous actions). Run with
 `python evals/run_eval.py --predictor runtime --governance --gate`.
 
+**Day 8 complete — demo milestone (single-page dashboard):** the agent runtime now serves
+a dependency-free **operations dashboard** at `/` (→ `/dashboard`) that wires the whole flow
+into one memorable screen: KPI cards (findings processed, tickets created, automation /
+approval / escalation rates, latency), an autonomy-split bar, the live **audit trail**, and a
+**pending-approvals** panel with working approve/reject buttons. A one-click **`POST /demo/seed`**
+ingests the bundled Semgrep + SARIF samples so the canonical story plays instantly — a critical
+SQLi **auto-creates** a ticket, a medium finding **waits for approval**, clear false positives
+are **auto-suppressed**, and an ambiguous case **escalates**. KPIs come from a new `GET /metrics`
+(pure aggregation over the audit trail; per-finding latency now recorded). Run it with
+`uvicorn app.main:app --port 8088` and open `http://localhost:8088/`.
+
 Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
 governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
 
-**Next — Day 8:** the demo milestone — single-page dashboard wiring the end-to-end flow
-(findings → governed ticketing → metrics) into a memorable walkthrough.
+**Next — Day 9:** upgrade the in-line nodes to the full **LangGraph** graph (explicit state,
+conditional routing, human-approval interrupts).
 
 ## Documentation
 

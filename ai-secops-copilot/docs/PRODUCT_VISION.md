@@ -74,6 +74,8 @@ Demo moment (memorable): Finding A @ 0.95 → auto-creates Jira ticket; Finding 
 **Ticketing:** Jira **real**, ServiceNow **mock** (same "provider-agnostic MCP layer" story, half the effort).
 **Dashboard (single page):** findings processed, tickets created, approval rate, automation rate,
 evaluation score, average latency, token cost, cache hit rate.
+*(Built Day 8: served at `/dashboard` with KPI cards, autonomy-split, live audit trail, and
+one-click `POST /demo/seed`. Token cost + cache-hit rate land with the AI Gateway, Day 11.)*
 
 ---
 
