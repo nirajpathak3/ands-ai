@@ -447,3 +447,96 @@ distributed-systems experience becomes a competitive advantage.
   resume updates, LinkedIn + Naukri copy (human tone, not AI-generated).
 - Mentoring + cooking approved for personal intro / LinkedIn; skip cooking in tight technical intros.
 - Resume: lead with Copilot (in active development), reframe obs-agent/veho, honest Ox AI line, add GitHub links.
+
+---
+
+## Conversation 13 — Language decision: Python vs Node vs Go
+
+**Question:** Pros/cons of hybrid? Can I build entirely in Node? What about Go?
+
+**Decision locked:** Continue hybrid — Python LangGraph agent runtime + NestJS gateway.
+- Don't learn Go for this push (wrong ROI: great for infra, weak AI ecosystem).
+- Don't go all-Node just for comfort — hybrid is the right split for speed + correctness.
+- Rule: if you can explain the Python agent code in interview, hybrid helps you; if you can't, it hurts.
+- Interview framing: "NestJS is where I ship reliably; Python is where LangGraph and eval tooling are strongest.
+  The split is a compatibility and speed decision, not a preference."
+- Interviewers hiring AI Platform Engineer care about architecture/evals/governance/failure modes — not language.
+- If all-Node: still valid for a Staff candidate who goes deep on evals + governance. Language is implementation choice.
+
+## Conversation 14 — Can I use the multi-agent project for Copilot development?
+
+**Question:** I used E:\ands-agentic\EL-AI\.agent (Intake→QA workflow) to build obs-agent.
+Should I use it to develop the Copilot too?
+
+**Answer:** Yes — same approach as obs-agent. Two separate concerns:
+- **Layer A (meta/dev): `.agent` SDLC orchestration** — how you build software with Cursor
+  (Intake → Plan → Architect → Build → Review → QA). Keep this generic, don't modify for Copilot domain.
+- **Layer B (product/runtime): Copilot LangGraph + NestJS** — what the product does at runtime.
+  Interviewers care about this; Layer A is a private development superpower.
+
+**How to use it:**
+1. Run `init-agent-project.ps1 -ProjectName "ai-secops-copilot"` → creates `.agent_state/` + junction to global `.agent`.
+2. Each project gets its own blackboard (`.agent_state/DECISIONS.md`, `PLAN.md`, `ARCHITECTURE.md`) — no collision.
+3. Global `.agent/workflows` stay domain-agnostic; Copilot context lives in its own `.agent_state/`.
+4. The Copilot LangGraph runtime lives in `services/agent-runtime/` — NOT inside `.agent/workflows`.
+
+**What to reuse from existing projects:**
+- `obs-agent` `AuthorityEvaluationService` → Copilot governance gate (confidence thresholds + dispositions).
+- `veho-platform` gate/blackboard design → LangGraph state + checkpointing.
+- `obs-agent` event-driven listener pattern → Copilot finding event pipeline.
+
+**Do NOT:** reuse obs-agent `.agent_state` for Copilot, run veho SDLC agents on findings,
+or merge all three repos into one.
+
+**Interview line:** "I use a governed multi-agent SDLC locally — intake, arch contract, build, review, QA —
+with a shared blackboard per project. I built obs-agent and the Copilot that way. The Copilot itself is
+a separate runtime: LangGraph for analysis and ticket decisions with confidence-gated approval."
+
+## Conversation 15 — Full resume rewrite, portal updates, and interview topic list
+
+**Deliverable:** `docs/planning/resume-and-prep.md` (human-tone, not AI-generated style).
+
+**Resume changes:**
+- Summary rewritten in first person — reads like a conversation, not a press release.
+- AI projects moved above work experience (most relevant for this role).
+- Copilot listed first with real implementation bullets; obs-agent and veho reframed without niche domain titles.
+- Removed "OpenAI Realtime APIs" from skills (not in project yet — can't defend it).
+- Softened Ox AI line to what's defensible: "Applied LangChain/LangGraph-based automation patterns."
+- GitHub links placeholder added throughout.
+- "Architecting" → "Building" for Copilot; "architecting" sounds like boxes not shipping.
+
+**LinkedIn:** Conversational About section written — Ox background, what drew you to AI (not hype),
+Copilot description, mentoring + cooking naturally at the end. One post draft for when repo goes public.
+
+**Naukri:** Shorter headline + profile summary + keyword-friendly skills tags.
+
+**15 interview topics with implementation angle:**
+1. RAG — retrieval vs fine-tuning, how to explain corpus update, eval angle
+2. LangGraph — graph vs chain, state, conditional edges, checkpointing, failure recovery
+3. Confidence-gated governance / HITL — threshold demo, three dispositions
+4. Evaluations — golden dataset, regression catches, "6% drop" story
+5. Idempotency — finding hash, why retries are dangerous without it
+6. Structured output validation — Pydantic, re-prompt, escalate path
+7. Prompt injection — untrusted content isolation, security-specific threat model
+8. AI Gateway — routing, fallback, Redis semantic cache, cost-per-finding story
+9. MCP — what it is, Jira adapter, why provider-agnostic abstraction matters
+10. Vector databases — pgvector vs Pinecone, cosine similarity, when to switch
+11. AI observability — what's different from normal services, eval metrics in dashboards
+12. Distributed systems reliability — your moat, how it applies to AI (same principles)
+13. System design — full structure for "design a finding triage platform" question
+14. Behavioral / leadership — Ox complexity, disagreements, debugging challenges
+15. Questions to ask interviewers — 5 Staff-level signal questions
+
+## Conversation 16 — Diagrams and conversation documentation
+
+**Deliverable:** `docs/diagrams/architecture.md` updated with 8 diagrams:
+1. Full system architecture (all components and connections)
+2. End-to-end request flow (sequence: scanner → Jira + Langfuse)
+3. Governance gate confidence flow (three dispositions)
+4. LangGraph agent state flow (stateDiagram with idempotency + retry)
+5. Failure handling paths (LLM / bad output / Jira / duplicate)
+6. Evaluation pipeline flow (golden dataset → metrics → pass/fail gate)
+7. Hybrid deployment topology (NestJS ↔ Python ↔ shared infra)
+8. Career narrative diagram (how obs-agent + veho patterns flow into Copilot)
+
+All conversations 13–16 logged to this file.

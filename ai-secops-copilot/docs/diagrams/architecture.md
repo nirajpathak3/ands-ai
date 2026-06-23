@@ -1,72 +1,306 @@
 # Architecture Diagrams — AI Security Operations Copilot
 
-## System Architecture (AI Gateway as single LLM egress)
+---
+
+## 1. Full System Architecture
+
+Shows every component and how they connect. The AI Gateway sits before the LLM — it is the
+single egress point for all model calls.
 
 ```mermaid
 flowchart LR
-    A[Semgrep Findings] --> B[Finding Analysis Node]
-    B --> C[AI Gateway]
-    C --> D[OpenAI]
-    C --> E[Claude Fallback]
-    B --> F[RAG Knowledge Layer]
-    F --> G[(OWASP)]
-    F --> H[(CWE)]
-    F --> I[(Historical Findings)]
-    F --> J[Ticket Decision Node]
-    J --> K[Governance Gate]
-    K -->|High Confidence| L[Auto Execute]
-    K -->|Medium Confidence| M[Human Approval]
-    K -->|Low Confidence| N[Escalate]
-    L --> O[Jira MCP]
-    M --> O
-    O --> P[Metrics & Evaluation]
-    C --> Q[Langfuse + OTel]
-    P --> Q
-    Q --> R[Dashboard]
+    subgraph input [Input Layer]
+        SG[Semgrep / SARIF]
+        API[NestJS API Gateway]
+    end
+
+    subgraph runtime [Agent Runtime — Python / LangGraph]
+        AN[Finding Analysis Node]
+        RAG[RAG Knowledge Layer]
+        DN[Ticket Decision Node]
+        GG[Governance Gate]
+    end
+
+    subgraph knowledge [Knowledge Store]
+        OW[(OWASP Top 10)]
+        CW[(CWE)]
+        CV[(CVE / Runbooks)]
+        PG[(pgvector — Postgres)]
+    end
+
+    subgraph gateway [AI Gateway — NestJS]
+        GW[Model Router]
+        SC[Semantic Cache — Redis]
+        CT[Cost / Latency Tracker]
+    end
+
+    subgraph models [LLM Providers]
+        OA[OpenAI — primary]
+        AN2[Claude — fallback]
+    end
+
+    subgraph tools [MCP Tool Layer]
+        JR[Jira MCP — real]
+        SN[ServiceNow MCP — mock]
+    end
+
+    subgraph observe [Observability]
+        LF[Langfuse]
+        OT[OpenTelemetry]
+        DB[Dashboard]
+    end
+
+    SG --> API
+    API --> AN
+    AN --> RAG
+    RAG --> OW & CW & CV
+    OW & CW & CV --> PG
+    PG --> AN
+    AN --> GW
+    GW --> SC
+    GW --> CT
+    GW --> OA
+    GW --> AN2
+    AN --> DN
+    DN --> GG
+    GG -->|confidence >= 0.90| AUTO[Auto Execute]
+    GG -->|0.60 <= c < 0.90| APPR[Human Approval]
+    GG -->|confidence < 0.60| ESC[Escalate]
+    AUTO --> JR
+    APPR --> JR
+    JR --> SN
+    CT --> LF
+    JR --> LF
+    LF --> OT
+    OT --> DB
 ```
 
-## System Flow (the single user flow that matters)
+---
+
+## 2. End-to-End Request Flow
+
+The path a single finding takes from ingestion to Jira ticket.
+
+```mermaid
+sequenceDiagram
+    participant SC as Scanner (Semgrep)
+    participant GW as NestJS Gateway
+    participant AN as Analysis Node
+    participant RAG as RAG Layer
+    participant LLM as AI Gateway → LLM
+    participant GG as Governance Gate
+    participant MCP as Jira MCP
+    participant LF as Langfuse
+
+    SC->>GW: POST /findings (SARIF JSON)
+    GW->>GW: validate + dedupe (finding_hash)
+    GW->>AN: run graph with finding state
+    AN->>RAG: embed finding → retrieve OWASP/CWE chunks
+    RAG-->>AN: top-k knowledge context
+    AN->>LLM: prompt (finding + context) → structured output
+    LLM->>LLM: route → cache check → OpenAI / Claude
+    LLM-->>AN: AnalysisResult {severity, confidence, reason}
+    LLM->>LF: log tokens, latency, cost
+    AN->>GG: pass confidence score
+    alt confidence >= 0.90
+        GG->>MCP: createIssue(payload)
+        MCP-->>GG: ticket_id
+    else 0.60 <= confidence < 0.90
+        GG-->>GW: approval_required event
+        GW-->>SC: 202 Accepted — pending approval
+    else confidence < 0.60
+        GG-->>GW: escalate event
+    end
+    MCP->>LF: log ticket action + result
+    LF->>LF: update metrics (automation_rate, approval_rate)
+```
+
+---
+
+## 3. Governance Gate — Confidence Flow
 
 ```mermaid
 flowchart TD
-    F1[Security Finding] --> F2[Finding Analysis]
-    F2 --> F3[Confidence Score]
-    F3 --> F4[Governance Decision]
-    F4 -->|High| F5[Auto Execute]
-    F4 -->|Medium| F6[Human Approval]
-    F5 --> F7[Jira Ticket]
-    F6 --> F7
-    F7 --> F8[Metrics + Evaluation]
+    C{Confidence Score}
+    C -->|">= 0.90 — high"| A[AUTO-EXECUTE\nJira ticket created immediately]
+    C -->|"0.60 – 0.89 — medium"| H[HUMAN APPROVAL\nanalyst notified, waits for confirm]
+    C -->|"< 0.60 — low"| E[ESCALATE\nrequires senior review]
+
+    A --> LOG[Audit log + Langfuse metric]
+    H --> WAIT[Approval queue]
+    WAIT -->|approved| LOG
+    WAIT -->|rejected| REJ[Rejected — log reason]
+    E --> LOG
 ```
 
-## Governance Model (two thresholds → three dispositions)
+---
+
+## 4. LangGraph — Agent State Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> FindingReceived
+    FindingReceived --> IdempotencyCheck
+    IdempotencyCheck --> AlreadyProcessed: hash exists
+    IdempotencyCheck --> FindingAnalysisNode: new finding
+    AlreadyProcessed --> [*]
+
+    FindingAnalysisNode --> RAGRetrieval: fetch knowledge
+    RAGRetrieval --> LLMCall: prompt + context
+    LLMCall --> OutputValidation: Pydantic schema
+    OutputValidation --> RepromptOnce: validation fail
+    RepromptOnce --> OutputValidation
+    OutputValidation --> TicketDecisionNode: valid result
+
+    TicketDecisionNode --> GovernanceGate
+    GovernanceGate --> AutoExecute: high confidence
+    GovernanceGate --> ApprovalQueue: medium confidence
+    GovernanceGate --> EscalateQueue: low confidence
+
+    AutoExecute --> JiraMCP
+    ApprovalQueue --> AwaitApproval
+    AwaitApproval --> JiraMCP: approved
+    AwaitApproval --> Rejected: rejected
+
+    JiraMCP --> RetryOnFail: Jira error
+    RetryOnFail --> JiraMCP: retry 1-3
+    RetryOnFail --> DeadLetterQueue: max retries hit
+
+    JiraMCP --> MetricsEmit
+    MetricsEmit --> [*]
+```
+
+---
+
+## 5. Failure Handling Paths
 
 ```mermaid
 flowchart TD
-    C{confidence} -->|">= autoThreshold (0.90)"| A[AUTO-EXECUTE]
-    C -->|"suggest <= c < auto"| H[HUMAN APPROVAL]
-    C -->|"< suggestThreshold (0.60)"| E[ESCALATE / REVIEW]
+    subgraph llm [LLM Failure]
+        L1[LLM timeout] --> L2[Retry with backoff]
+        L2 --> L3{Retry ok?}
+        L3 -->|yes| L4[Continue]
+        L3 -->|no| L5[Claude fallback]
+        L5 --> L6{Fallback ok?}
+        L6 -->|no| L7[Escalate finding]
+    end
+
+    subgraph out [Bad Output]
+        O1[Invalid JSON / schema] --> O2[Re-prompt once with error]
+        O2 --> O3{Valid?}
+        O3 -->|yes| O4[Continue]
+        O3 -->|no| O5[Escalate — do not execute tool]
+    end
+
+    subgraph jira [Jira Failure]
+        J1[Jira API error] --> J2[Retry 1-3x backoff]
+        J2 --> J3{Ok?}
+        J3 -->|yes| J4[Ticket created]
+        J3 -->|no| J5[Dead Letter Queue]
+        J5 --> J6[Alert + manual review]
+    end
+
+    subgraph dup [Duplicate Prevention]
+        D1[Incoming finding] --> D2[Compute finding_hash]
+        D2 --> D3{Hash seen?}
+        D3 -->|yes| D4[Skip — return existing ticket_id]
+        D3 -->|no| D5[Process normally]
+    end
 ```
 
-## Hybrid Deployment Topology
+---
+
+## 6. Evaluation Pipeline Flow
 
 ```mermaid
 flowchart LR
-    subgraph cp [Control Plane - NestJS/TS]
-      GW[AI Gateway + API]
-      DASH[Dashboard]
+    GD[Golden Dataset\n50 labeled findings] --> RUN[run_eval.py]
+    RUN --> PRED[Run each finding\nthrough agent]
+    PRED --> CMP[Compare prediction\nvs label]
+
+    CMP --> M1[Severity Accuracy]
+    CMP --> M2[Ticket Action Accuracy]
+    CMP --> M3[FP Precision / Recall / F1]
+    CMP --> M4[LLM-as-Judge\nroot cause quality]
+
+    M1 & M2 & M3 & M4 --> SCORE[Overall Eval Score]
+    SCORE --> GATE{Score >= threshold?}
+    GATE -->|pass| MERGE[Safe to merge / ship]
+    GATE -->|fail| BLOCK[Block — show regression diff]
+```
+
+---
+
+## 7. Hybrid Deployment Topology
+
+Shows how the two services talk to each other and to shared infra.
+
+```mermaid
+flowchart TB
+    subgraph ts [TypeScript — NestJS]
+        API2[Findings API\nPOST /findings]
+        GW2[AI Gateway\nrouting · cache · cost]
+        MCP2[MCP Tool Layer\nJira / ServiceNow]
+        DASH2[Dashboard API]
     end
-    subgraph ar [Agent Runtime - Python/LangGraph]
-      GRAPH[Analysis + Decision Graph]
-      EVAL[Eval Harness]
+
+    subgraph py [Python — LangGraph]
+        GRAPH[Agent Graph\nAnalysis → Decision → Gate]
+        EVAL[Eval Harness\nrun_eval.py]
+        RAG2[RAG Service\nembed · retrieve · rank]
     end
-    subgraph data [Data]
-      PG[(Postgres + pgvector)]
-      REDIS[(Redis cache)]
+
+    subgraph data [Shared Data]
+        PG2[(Postgres + pgvector)]
+        RED[(Redis\nsemantic cache · state)]
     end
-    GW --> GRAPH
-    GRAPH --> PG
-    GW --> REDIS
-    GRAPH --> GW
-    GW --> LF[Langfuse + OTel]
+
+    subgraph obs [Observability]
+        LF2[Langfuse\nLLM traces]
+        OT2[OpenTelemetry\nservice spans]
+    end
+
+    API2 -->|HTTP| GRAPH
+    GRAPH --> GW2
+    GRAPH --> RAG2
+    RAG2 --> PG2
+    GW2 --> RED
+    GRAPH --> RED
+    GW2 --> OA2[OpenAI]
+    GW2 --> CL2[Claude]
+    GRAPH --> MCP2
+    MCP2 --> JIRA[Jira API]
+    GW2 --> LF2
+    MCP2 --> LF2
+    LF2 --> OT2
+    OT2 --> DASH2
+```
+
+---
+
+## 8. Career Narrative — How the projects connect
+
+For interviews: shows you built a *platform*, not isolated demos.
+
+```mermaid
+flowchart LR
+    subgraph existing [Existing Projects — Reused Patterns]
+        OBS[obs-agent\nHITL governance\nconfidence gating\naudit trail\nNestJS DDD]
+        VEHO[veho-platform\nblackboard state\ngate workflows\nmulti-agent design]
+    end
+
+    subgraph copilot [AI Security Ops Copilot — Flagship]
+        CORE[LangGraph runtime\nFinding Analysis\nTicket Decision\nGovernance Gate]
+        RAGC[RAG Layer\npgvector · OWASP · CWE]
+        GWAYC[AI Gateway\nNestJS · routing\ncache · cost]
+        EVALC[Eval Harness\ngolden dataset\naccuracy · F1\nregression gate]
+        MCPC[MCP Tools\nJira · ServiceNow]
+    end
+
+    OBS -->|governance pattern| CORE
+    VEHO -->|agent state & gates| CORE
+    CORE --> RAGC
+    CORE --> GWAYC
+    CORE --> EVALC
+    CORE --> MCPC
 ```
