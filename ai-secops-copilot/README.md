@@ -67,6 +67,7 @@ ai-secops-copilot/
 │  └─ planning/                    # Build planning + conversation log
 ├─ datasets/
 │  ├─ findings/security-findings-v1.json   # Golden dataset: 50 labeled findings
+│  ├─ knowledge/security-kb-v1.json        # RAG corpus: OWASP Top 10 + CWE guidance
 │  ├─ samples/                             # sample Semgrep + SARIF reports for /ingest
 │  └─ schema/security-findings-v1.schema.json  # JSON Schema for the dataset
 ├─ evals/                          # Evaluation harness
@@ -76,7 +77,7 @@ ai-secops-copilot/
 ├─ services/
 │  ├─ gateway/                     # NestJS control plane + AI Gateway (single LLM egress)
 │  └─ agent-runtime/               # Python LangGraph agent runtime
-├─ infra/postgres/init.sql         # enables pgvector
+├─ infra/postgres/                 # init.sql (enables pgvector) + knowledge.sql (RAG schema)
 └─ scripts/                        # run-checks.ps1 / run-checks.sh
 ```
 
@@ -136,7 +137,19 @@ and drives them through the full pipeline, returning a per-finding result + outc
 summary. Clean-room sample reports live in [`datasets/samples/`](datasets/samples/).
 The Copilot ingests findings — it does not scan — so no scanner CLI or keys are needed.
 
-**Next — Day 5:** RAG groundwork (Postgres + pgvector) for OWASP/CWE retrieval.
+**Day 5 complete — RAG knowledge layer:** analysis is now **grounded** in a clean-room
+**OWASP Top 10 (2021) + CWE** knowledge base ([`datasets/knowledge/`](datasets/knowledge/))
+and every decision carries **citations** (ADR-001). Retrieval sits behind a
+`KnowledgeRetriever` seam: the default is a pure-stdlib **lexical retriever** (TF-IDF +
+exact CWE/OWASP id boost) that runs offline and deterministically; **pgvector**
+(ADR-002, schema in [`infra/postgres/knowledge.sql`](infra/postgres/knowledge.sql))
+slots in behind the same interface when `DATABASE_URL` is set. Retrieved text is fed to
+the LLM prompt as a **trusted** block, kept separate from the untrusted finding
+(ADR-011). New `GET /knowledge/search`; `/analyze` responses now include
+`decision.citations`.
+
+**Next — Day 6:** evaluation harness upgrade (DeepEval/RAGAS-style + LLM-as-judge) and
+broader regression gating.
 
 ## Documentation
 

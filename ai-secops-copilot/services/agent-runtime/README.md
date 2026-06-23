@@ -5,11 +5,12 @@ flow end to end:
 
 ```text
 scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
-  -> Finding Analysis Node -> Ticket Decision Node
+  -> RAG (retrieve OWASP/CWE) -> Finding Analysis Node -> Ticket Decision Node
   -> Governance Gate -> execute (auto-ticket | approval queue | escalate)
 ```
 
 - **Ingestion** — normalizes raw **Semgrep JSON** and **SARIF v2.1.0** reports into the common finding contract (ADR-007); the Copilot ingests findings, it does not scan. **Implemented.**
+- **RAG knowledge layer** — retrieves **OWASP/CWE** guidance (ADR-001) to ground analysis and **cite** every decision. Offline pure-stdlib lexical retriever (TF-IDF + exact CWE/OWASP id boost) by default; **pgvector** (ADR-002) slots in behind the same `KnowledgeRetriever` seam when `DATABASE_URL` is set. Retrieved text is passed to the LLM prompt as a **trusted** block, kept separate from the untrusted finding. **Implemented.**
 - **Finding Analysis Node** — analyzes a finding into `{severity, confidence, reason, recommendedAction}` through the `LLMClient` seam and **validates the structured output** (Pydantic) before anything acts on it, bounded-retrying on invalid output (ADR-010). Finding text is treated as untrusted input, isolated from instructions (ADR-011). **Implemented.**
 - **Ticket Decision Node + Governance Gate** — maps confidence → disposition (auto-execute / human-approval / escalate). **Implemented.**
 - **Ticketing + HITL** — provider-agnostic ticketing (ADR-008) with idempotent adapters (ADR-009): in-memory **mock** (default), **real Jira** (Cloud REST v3, idempotent via a `finding-<hash>` label search), and a **ServiceNow mock**. Human-approval queue, escalation queue, and a **dead-letter queue** for provider failures. **Implemented.**
@@ -19,18 +20,20 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 4 — Semgrep/SARIF ingestion)
+## Status (Day 5 — RAG knowledge layer)
 
 | Piece | State |
 | --- | --- |
 | Domain enums, governance, idempotency, schemas | ✅ implemented + unit-tested |
-| **Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract** | ✅ implemented + tested |
+| Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract | ✅ implemented + tested |
+| **RAG: OWASP/CWE corpus + lexical retriever + citations** | ✅ implemented + tested |
 | Finding analysis (deterministic LLM stand-in) + structured-output validation | ✅ implemented + tested |
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `POST /analyze`, **`POST /ingest`**, approvals/tickets/escalations/deadletter | ✅ working |
+| `POST /analyze`, `POST /ingest`, **`GET /knowledge/search`**, approvals/tickets/escalations/deadletter | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
+| pgvector retrieval backend (ADR-002) | ⏳ seam in place (offline lexical default) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
 
 ## Ticket providers
@@ -83,6 +86,10 @@ curl -X POST localhost:8088/approvals/<finding_hash>/approve
 curl -X POST localhost:8088/ingest -H "content-type: application/json" \
   -d "{\"format\":\"auto\",\"report\": $(cat ../../datasets/samples/semgrep-sample.json)}"
 
+# Retrieve grounding knowledge (RAG layer) for a free-text query:
+curl "localhost:8088/knowledge/search?q=sql+injection+parameterized+query&k=3"
+# /analyze responses now include decision.citations (the OWASP/CWE refs used).
+
 # The governance gate in isolation:
 curl -X POST localhost:8088/governance/preview -H "content-type: application/json" \
   -d '{"confidence": 0.95, "recommendedAction": "create_ticket"}'   # -> auto_execute
@@ -91,7 +98,7 @@ curl -X POST localhost:8088/governance/preview -H "content-type: application/jso
 ## Test
 
 ```bash
-pytest                # 49 tests: governance, idempotency, analysis, ticketing, pipeline, ingestion
+pytest                # 57 tests: governance, idempotency, analysis, ticketing, pipeline, ingestion, rag
 ruff check .
 ```
 
@@ -102,16 +109,17 @@ app/
 ├─ domain.py        # Severity / Action / Disposition enums (single source of truth)
 ├─ governance.py    # confidence-gated, two-threshold -> three-disposition gate
 ├─ idempotency.py   # finding_hash (duplicate-ticket prevention, ADR-009)
-├─ schemas.py       # Pydantic structured-output contract (ADR-010)
+├─ schemas.py       # Pydantic structured-output contract (ADR-010) + citations
 ├─ ingestion/       # scanner-report adapters: semgrep, sarif, common helpers (ADR-007)
+├─ rag/             # knowledge layer: corpus, lexical retriever, pgvector seam (ADR-001/002)
 ├─ analysis.py      # deterministic finding analysis (the offline LLM stand-in)
 ├─ prompts.py       # analysis prompt + prompt-injection isolation (ADR-011)
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
 ├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
-├─ pipeline.py      # end-to-end run_pipeline (Finding -> analysis -> gov -> action)
+├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ config.py        # env-driven settings
-├─ main.py          # FastAPI app (/analyze, /ingest, /approvals, /tickets, /escalations, /deadletter)
+├─ main.py          # FastAPI app (/analyze, /ingest, /knowledge/search, /approvals, /tickets, ...)
 └─ graph/           # LangGraph: state, nodes, build
 tests/              # unit + end-to-end tests
 ```

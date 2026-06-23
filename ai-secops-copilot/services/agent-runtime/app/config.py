@@ -41,6 +41,13 @@ class Settings:
     # Bounded re-prompts when the model returns invalid structured output (ADR-010).
     analysis_max_retries: int = int(os.environ.get("ANALYSIS_MAX_RETRIES", "2"))
 
+    # RAG knowledge layer (ADR-001): retrieve OWASP/CWE guidance to ground analysis.
+    # Offline lexical retriever by default; pgvector (ADR-002) when DATABASE_URL is set.
+    rag_enabled: bool = os.environ.get("RAG_ENABLED", "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    rag_top_k: int = int(os.environ.get("RAG_TOP_K", "3"))
+
     # Ticketing (ADR-008): mock (default) | jira | servicenow.
     ticket_provider: str = os.environ.get("TICKET_PROVIDER", "mock")
     jira_base_url: str = os.environ.get("JIRA_BASE_URL", "")

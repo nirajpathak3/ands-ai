@@ -6,6 +6,9 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * POST /analyze                        - full pipeline: Finding -> analysis ->
                                            governance -> action (auto-ticket /
                                            approval queue / escalate)
+  * POST /ingest                         - normalize a Semgrep/SARIF report and run
+                                           every finding through the pipeline
+  * GET  /knowledge/search               - retrieve OWASP/CWE guidance (RAG layer)
   * GET  /approvals                      - list decisions awaiting human approval
   * POST /approvals/{finding_hash}/approve - approve -> create the ticket (HITL)
   * POST /approvals/{finding_hash}/reject  - reject a pending decision
@@ -28,6 +31,7 @@ from .governance import evaluate as governance_evaluate
 from .ingestion import normalize
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
+from .rag import get_retriever
 from .schemas import AnalyzeRequest, Finding
 from .ticketing import ApprovalStore, DeadLetterQueue, EscalationQueue
 
@@ -40,6 +44,7 @@ app = FastAPI(
 # Provider is selected from config (mock by default; jira/servicenow when set).
 # Day 10 persists approvals via checkpointing.
 _provider = get_ticket_provider(get_settings())
+_retriever = get_retriever(get_settings())
 _approvals = ApprovalStore()
 _escalations = EscalationQueue()
 _dead_letter = DeadLetterQueue()
@@ -54,6 +59,12 @@ def health() -> dict:
         "version": __version__,
         "environment": settings.environment,
         "ticketProvider": getattr(_provider, "name", "unknown"),
+        "knowledge": {
+            "ragEnabled": settings.rag_enabled,
+            "retriever": getattr(_retriever, "name", None),
+            "documents": len(_retriever) if _retriever is not None else 0,
+            "topK": settings.rag_top_k,
+        },
         "governance": {
             "autoThreshold": settings.auto_threshold,
             "suggestThreshold": settings.suggest_threshold,
@@ -97,6 +108,7 @@ def analyze(req: AnalyzeRequest) -> dict:
         approvals=_approvals,
         escalations=_escalations,
         dead_letter=_dead_letter,
+        retriever=_retriever,
     )
 
 
@@ -129,7 +141,7 @@ def ingest(req: IngestRequest) -> dict:
             continue
         out = run_pipeline(
             finding.model_dump(), provider=_provider, approvals=_approvals,
-            escalations=_escalations, dead_letter=_dead_letter,
+            escalations=_escalations, dead_letter=_dead_letter, retriever=_retriever,
         )
         outcome = out["action"]["outcome"]
         summary[outcome] = summary.get(outcome, 0) + 1
@@ -147,6 +159,26 @@ def ingest(req: IngestRequest) -> dict:
         "summary": summary,
         "results": results,
         "skippedDetail": skipped,
+    }
+
+
+@app.get("/knowledge/search")
+def knowledge_search(q: str, k: int = 3) -> dict:
+    """Retrieve OWASP/CWE guidance for a free-text query (RAG layer demo, ADR-001)."""
+    if _retriever is None:
+        raise HTTPException(status_code=503, detail="RAG is disabled (RAG_ENABLED=false).")
+    try:
+        hits = _retriever.retrieve(q, k=k)
+    except Exception as exc:  # noqa: BLE001 - surface backend errors as 503
+        raise HTTPException(status_code=503, detail=f"Retriever error: {exc}") from None
+    return {
+        "query": q,
+        "retriever": getattr(_retriever, "name", "unknown"),
+        "count": len(hits),
+        "results": [
+            {**h.to_citation(), "type": h.document.type, "snippet": h.document.text}
+            for h in hits
+        ],
     }
 
 

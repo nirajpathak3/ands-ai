@@ -14,6 +14,7 @@ from ..config import get_settings
 from ..domain import Action
 from ..idempotency import finding_hash
 from ..llm import analyze_and_validate, get_default_client
+from ..rag import format_context, get_default_retriever
 from .state import GraphState
 
 
@@ -38,6 +39,21 @@ def finding_analysis_node(state: GraphState) -> GraphState:
     settings = get_settings()
     finding = state.get("finding", {})
     client = state.get("_client") or get_default_client()
+
+    # RAG: retrieve OWASP/CWE guidance to ground the analysis and cite the decision
+    # (ADR-001). The retrieved text is passed to the LLM prompt as TRUSTED context,
+    # kept separate from the UNTRUSTED finding (ADR-011). The offline deterministic
+    # client decides from rules; the citations still surface the grounding, and the
+    # real LLM (Day 11) consumes the context via prompts.build_analysis_messages.
+    if settings.rag_enabled:
+        retriever = state.get("_retriever") or get_default_retriever()
+        if retriever is not None:
+            try:
+                hits = retriever.retrieve_for_finding(finding, k=settings.rag_top_k)
+                state["rag_context"] = format_context(hits)
+                state["citations"] = [h.to_citation() for h in hits]
+            except Exception as exc:  # noqa: BLE001 - retrieval is best-effort grounding
+                state.setdefault("errors", []).append(f"rag_retrieval: {exc}")
 
     result, attempts, error = analyze_and_validate(
         finding, client, max_retries=settings.analysis_max_retries
@@ -89,5 +105,6 @@ def ticket_decision_node(state: GraphState) -> GraphState:
         "disposition": decision.disposition.value,
         "requiresHuman": decision.requires_human,
         "governanceReason": decision.reason,
+        "citations": state.get("citations", []),
     }
     return state

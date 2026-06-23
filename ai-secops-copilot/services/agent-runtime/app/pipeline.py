@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from .graph.nodes import finding_analysis_node, ingest_node, ticket_decision_node
 from .graph.state import GraphState
 from .llm import LLMClient
+from .rag import KnowledgeRetriever
 from .ticketing import (
     ApprovalStore,
     DeadLetterQueue,
@@ -34,6 +35,7 @@ def run_pipeline(
     escalations: EscalationQueue,
     dead_letter: DeadLetterQueue | None = None,
     client: LLMClient | None = None,
+    retriever: KnowledgeRetriever | None = None,
 ) -> dict:
     """Process one finding end to end and execute the resulting decision.
 
@@ -42,6 +44,8 @@ def run_pipeline(
     state: GraphState = {"finding": dict(finding)}
     if client is not None:
         state["_client"] = client  # type: ignore[typeddict-unknown-key]
+    if retriever is not None:
+        state["_retriever"] = retriever  # type: ignore[typeddict-unknown-key]
 
     state = ingest_node(state)
     state = finding_analysis_node(state)

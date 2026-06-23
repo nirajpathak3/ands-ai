@@ -49,6 +49,18 @@ class AnalysisResult(BaseModel):
     recommendedAction: Action
 
 
+class Citation(BaseModel):
+    """A retrieved knowledge-base reference grounding the analysis (ADR-001)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    source: str
+    url: str | None = None
+    score: float | None = None
+
+
 class TicketDecision(BaseModel):
     """Output of the Ticket Decision Node after the Governance Gate."""
 
@@ -60,6 +72,7 @@ class TicketDecision(BaseModel):
     disposition: Disposition
     requiresHuman: bool
     governanceReason: str
+    citations: list[Citation] = Field(default_factory=list)
 
 
 class AnalyzeRequest(BaseModel):
