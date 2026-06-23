@@ -10,7 +10,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from .governance import DEFAULT_AUTO_THRESHOLD, DEFAULT_SUGGEST_THRESHOLD
+from .governance import (
+    DEFAULT_AUTO_THRESHOLD,
+    DEFAULT_SUGGEST_THRESHOLD,
+    DEFAULT_SUPPRESS_AUTO_THRESHOLD,
+)
 
 
 def _env_float(key: str, default: float) -> float:
@@ -37,6 +41,10 @@ class Settings:
     # Governance thresholds (overridable via env; defaults from PRODUCT_VISION.md).
     auto_threshold: float = _env_float("GOVERNANCE_AUTO_THRESHOLD", DEFAULT_AUTO_THRESHOLD)
     suggest_threshold: float = _env_float("GOVERNANCE_SUGGEST_THRESHOLD", DEFAULT_SUGGEST_THRESHOLD)
+    # Stricter bar to auto-suppress than to auto-ticket (ADR-005, asymmetric risk).
+    suppress_auto_threshold: float = _env_float(
+        "GOVERNANCE_SUPPRESS_AUTO_THRESHOLD", DEFAULT_SUPPRESS_AUTO_THRESHOLD
+    )
 
     # Bounded re-prompts when the model returns invalid structured output (ADR-010).
     analysis_max_retries: int = int(os.environ.get("ANALYSIS_MAX_RETRIES", "2"))

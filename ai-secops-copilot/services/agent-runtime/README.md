@@ -20,18 +20,19 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 5 — RAG knowledge layer)
+## Status (Day 7 — governance hardening + audit trail)
 
 | Piece | State |
 | --- | --- |
-| Domain enums, governance, idempotency, schemas | ✅ implemented + unit-tested |
+| **Governance policy engine** (asymmetric auto-suppress bar, reason codes) | ✅ implemented + unit-tested |
+| **Audit trail** (`GET /audit`: who/what/why per decision) | ✅ implemented + tested |
 | Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract | ✅ implemented + tested |
-| **RAG: OWASP/CWE corpus + lexical retriever + citations** | ✅ implemented + tested |
+| RAG: OWASP/CWE corpus + lexical retriever + citations | ✅ implemented + tested |
 | Finding analysis (deterministic LLM stand-in) + structured-output validation | ✅ implemented + tested |
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `POST /analyze`, `POST /ingest`, **`GET /knowledge/search`**, approvals/tickets/escalations/deadletter | ✅ working |
+| `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, **`GET /audit`**, approvals/tickets/escalations/deadletter | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
 | pgvector retrieval backend (ADR-002) | ⏳ seam in place (offline lexical default) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
@@ -98,7 +99,7 @@ curl -X POST localhost:8088/governance/preview -H "content-type: application/jso
 ## Test
 
 ```bash
-pytest                # 57 tests: governance, idempotency, analysis, ticketing, pipeline, ingestion, rag
+pytest                # governance (policy + audit), idempotency, analysis, ticketing, pipeline, ingestion, rag, api
 ruff check .
 ```
 
@@ -107,7 +108,7 @@ ruff check .
 ```text
 app/
 ├─ domain.py        # Severity / Action / Disposition enums (single source of truth)
-├─ governance.py    # confidence-gated, two-threshold -> three-disposition gate
+├─ governance.py    # policy engine: thresholds + asymmetric auto-suppress + reason codes
 ├─ idempotency.py   # finding_hash (duplicate-ticket prevention, ADR-009)
 ├─ schemas.py       # Pydantic structured-output contract (ADR-010) + citations
 ├─ ingestion/       # scanner-report adapters: semgrep, sarif, common helpers (ADR-007)

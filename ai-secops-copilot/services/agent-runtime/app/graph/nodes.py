@@ -96,6 +96,7 @@ def ticket_decision_node(state: GraphState) -> GraphState:
         recommended_action=Action(analysis["recommendedAction"]),
         auto_threshold=settings.auto_threshold,
         suggest_threshold=settings.suggest_threshold,
+        suppress_auto_threshold=settings.suppress_auto_threshold,
     )
 
     state["decision"] = {
@@ -105,6 +106,7 @@ def ticket_decision_node(state: GraphState) -> GraphState:
         "disposition": decision.disposition.value,
         "requiresHuman": decision.requires_human,
         "governanceReason": decision.reason,
+        "reasonCode": decision.reason_code.value,
         "citations": state.get("citations", []),
     }
     return state

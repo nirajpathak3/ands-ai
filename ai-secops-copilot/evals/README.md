@@ -21,7 +21,7 @@ Add the regression gate (non-zero exit if metrics drop below thresholds — use 
 python evals/run_eval.py --gate
 ```
 
-Run the full suite — classification **+ RAG retrieval quality + LLM-as-judge** — and gate it (this is what CI runs):
+Run the full suite — classification **+ RAG retrieval quality + LLM-as-judge + governance** — and gate it (this is what CI runs):
 
 ```bash
 python evals/run_eval.py --predictor runtime --all --gate
@@ -42,6 +42,10 @@ python evals/run_eval.py --baseline evals/runs/latest.json
   CWEs missing from the corpus (RAGAS-style context relevance, measured on the real retriever)
 - **LLM-as-judge** (`--judge`): a reasoning-quality score (reason present, action↔severity
   consistency, confidence calibration, groundedness) via a swappable `Judge` seam
+- **Governance autonomy/safety** (`--governance`): automation / review / escalation rates,
+  **auto-action accuracy** ("when we act without a human, are we right?"), missed
+  automations, and an auto-threshold **sweep** that surfaces the autonomy/safety trade-off
+  used to *tune* the governance thresholds from data (ADR-005)
 - **Mean / p95 processing latency**
 
 ## Predictors
@@ -101,5 +105,6 @@ meant to close. That before/after delta is the headline evaluation story.
 - `predictors.py` — predictor implementations + registry.
 - `retrieval_eval.py` — RAG retrieval-quality metrics over the real retriever.
 - `judge.py` — LLM-as-judge seam (deterministic offline judge + Gateway stub).
+- `governance_eval.py` — autonomy/safety metrics + auto-threshold sweep (governance tuning).
 - `test_eval_harness.py` — harness self-tests (`python -m pytest evals`).
 - `runs/` — generated reports (git-ignored); `runs/latest.json` is the most recent.

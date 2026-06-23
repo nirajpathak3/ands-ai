@@ -29,9 +29,17 @@ governed agentic workflow. Reuses the orchestration concepts from the multi-agen
 
 ### ADR-005 — Confidence-gated automation (two thresholds → three dispositions)
 **Decision:** Auto-execute above an autonomy threshold; require human approval in the middle band; escalate below.
+Refined (Day 7) into an **asymmetric-risk** policy: auto-creating a ticket clears `auto_threshold`
+(0.90), but auto-**suppressing** a finding must clear a stricter `suppress_auto_threshold` (0.95).
+Every decision carries a machine-readable `reasonCode` and is written to an append-only **audit trail**
+(`GET /audit`, actor = `system` | `human`).
 **Why:** Safe autonomy with human oversight where uncertainty is high — the core governance value.
+The asymmetry encodes that auto-dismissing a real vulnerability is the costlier, less-recoverable error
+than auto-filing a ticket a human can close. Audit + reason codes make the automation accountable.
 Mirrors a confidence-gating pattern already built for a real-time system (obs-agent AuthorityEvaluationService).
-**Tradeoff:** Thresholds must be tuned and justified by eval data, not guessed.
+**Tradeoff:** Thresholds must be tuned and justified by eval data, not guessed — so `evals/governance_eval.py`
+measures auto-action accuracy and sweeps the threshold to pick the operating point, and the gate enforces
+`auto_action_accuracy ≥ 0.99` (no wrong autonomous actions).
 
 ### ADR-006 — AI Gateway as the single LLM egress
 **Decision:** All model calls flow through one Gateway (routing, semantic cache, cost/latency tracking, fallback).

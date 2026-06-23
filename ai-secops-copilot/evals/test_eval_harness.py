@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import governance_eval  # noqa: E402
 import judge as judge_mod  # noqa: E402
 import metrics  # noqa: E402
 import retrieval_eval  # noqa: E402
@@ -69,9 +70,35 @@ def test_evaluate_judge_aggregates():
     assert 0.0 <= result["overall"] <= 1.0
 
 
+# --- governance evaluation ---------------------------------------------------
+
+def test_governance_eval_no_wrong_autonomous_actions():
+    dataset = run_eval.load_dataset(run_eval.DEFAULT_DATASET)
+    predictor = run_eval.predictors.get_predictor("runtime")
+    result = governance_eval.evaluate_governance(dataset["findings"], predictor)
+    assert result["available"] is True
+    # The runtime predictor is correct on this set -> autonomous actions are all right.
+    assert result["autoActionAccuracy"] == 1.0
+    assert result["autoExecuted"] > 0
+    assert 0.0 <= result["automationRate"] <= 1.0
+
+
+def test_governance_sweep_monotone_automation():
+    dataset = run_eval.load_dataset(run_eval.DEFAULT_DATASET)
+    predictor = run_eval.predictors.get_predictor("runtime")
+    rows = governance_eval.sweep_auto_threshold(
+        dataset["findings"], predictor, [0.6, 0.8, 0.95]
+    )
+    assert len(rows) == 3
+    # A higher auto-threshold never increases automation.
+    rates = [r["automationRate"] for r in rows]
+    assert rates[0] >= rates[-1]
+
+
 # --- end-to-end gate ---------------------------------------------------------
 
 def test_run_eval_all_gate_passes_for_runtime():
+    # --all includes classification + retrieval + judge + governance, all gated.
     rc = run_eval.main(
         ["--predictor", "runtime", "--all", "--gate", "--no-write", "--quiet"]
     )

@@ -252,10 +252,11 @@ def analyze_finding(finding: Finding) -> Analysis:
     snippet = _text(finding, "codeSnippet")
     snippet_lower = snippet.lower()
 
-    # 1) False positive? -> suppress (info, high confidence it's not real).
+    # 1) False positive? -> suppress. High confidence: these detectors fire only on
+    #    clear rule misfires, so they clear the stricter auto-suppress bar (ADR-005).
     suppress = _suppress_reason(finding, cwe, rule, file_lower, snippet, snippet_lower)
     if suppress is not None:
-        return _result("info", "suppress", 0.9, suppress)
+        return _result("info", "suppress", 0.95, suppress)
 
     # 2) Ambiguous trust boundary? -> escalate (low confidence: needs a human).
     escalate = _escalate_reason(cwe, rule, snippet, snippet_lower)

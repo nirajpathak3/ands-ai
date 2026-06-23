@@ -37,6 +37,7 @@ from typing import Dict, List, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import governance_eval  # noqa: E402
 import judge as judge_mod  # noqa: E402
 import metrics  # noqa: E402
 import predictors  # noqa: E402
@@ -52,11 +53,16 @@ DEFAULT_THRESHOLDS = {
     "severity_accuracy": 0.80,
     "action_accuracy": 0.80,
     "fp_detection_f1": 0.0,
-    # Quality gates for the RAG retrieval + LLM-as-judge passes (only enforced
-    # when those passes are computed, i.e. --rag / --judge / --all).
+    # Quality gates for the RAG retrieval + LLM-as-judge + governance passes (only
+    # enforced when those passes are computed, i.e. --rag / --judge / --governance / --all).
     "retrieval_hit_at_k": 0.90,
     "judge_overall": 0.80,
+    # When we act WITHOUT a human, we must be right: no wrong autonomous actions.
+    "auto_action_accuracy": 0.99,
 }
+
+# Auto-threshold values swept to show the autonomy/safety trade-off.
+SWEEP_THRESHOLDS = [0.60, 0.70, 0.80, 0.85, 0.90, 0.95]
 
 
 def _git_commit() -> Optional[str]:
@@ -170,6 +176,9 @@ def apply_gate(report: dict, thresholds: Dict[str, float]) -> dict:
     judge = report.get("judge")
     if isinstance(judge, dict):
         actuals["judge_overall"] = judge["overall"]
+    gov = report.get("governance")
+    if isinstance(gov, dict) and gov.get("available"):
+        actuals["auto_action_accuracy"] = gov["autoActionAccuracy"]
 
     failures = []
     for key, minimum in thresholds.items():
@@ -270,6 +279,26 @@ def print_report(report: dict, baseline: Optional[dict]) -> None:
         for name, rate in judge["checkPassRates"].items():
             print(f"  {('  - ' + name):<28}: {_pct(rate)}")
 
+    gov = report.get("governance")
+    if isinstance(gov, dict) and gov.get("available"):
+        pol = gov["policy"]
+        print("-" * 70)
+        print("  Governance (autonomy vs. safety)")
+        print(f"  {'policy auto/suggest/suppr':<28}: "
+              f"{pol['autoThreshold']:.2f} / {pol['suggestThreshold']:.2f} / "
+              f"{pol['suppressAutoThreshold']:.2f}")
+        print(f"  {'automation / review / esc':<28}: {_pct(gov['automationRate'])} / "
+              f"{_pct(gov['reviewRate'])} / {_pct(gov['escalationRate'])}")
+        print(f"  {'auto-action accuracy':<28}: {_pct(gov['autoActionAccuracy'])} "
+              f"({gov['autoExecuted']} auto-executed)")
+        print(f"  {'missed automations':<28}: {gov['missedAutomations']} "
+              "(correct but sent to a human)")
+        if report.get("governanceSweep"):
+            print("  auto-threshold sweep (threshold -> automation / auto-accuracy):")
+            for row in report["governanceSweep"]:
+                print(f"    {row['autoThreshold']:.2f} -> {_pct(row['automationRate'])} / "
+                      f"{_pct(row['autoActionAccuracy'])}")
+
     if report.get("gate", {}).get("enabled"):
         gate = report["gate"]
         print("-" * 70)
@@ -302,13 +331,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--gate", action="store_true", help="Enable the regression gate (non-zero exit on failure).")
     parser.add_argument("--rag", action="store_true", help="Also evaluate RAG retrieval quality (hit@k, MRR).")
     parser.add_argument("--judge", action="store_true", help="Also run the LLM-as-judge reasoning-quality pass.")
-    parser.add_argument("--all", action="store_true", help="Run the base eval plus --rag and --judge.")
+    parser.add_argument("--governance", action="store_true", help="Also run the governance autonomy/safety pass + threshold sweep.")
+    parser.add_argument("--all", action="store_true", help="Run the base eval plus --rag, --judge and --governance.")
     parser.add_argument("--k", type=int, default=3, help="top-k for retrieval evaluation (default 3).")
     parser.add_argument("--min-severity-accuracy", type=float, default=DEFAULT_THRESHOLDS["severity_accuracy"])
     parser.add_argument("--min-action-accuracy", type=float, default=DEFAULT_THRESHOLDS["action_accuracy"])
     parser.add_argument("--min-fp-f1", type=float, default=DEFAULT_THRESHOLDS["fp_detection_f1"])
     parser.add_argument("--min-retrieval-hitk", type=float, default=DEFAULT_THRESHOLDS["retrieval_hit_at_k"])
     parser.add_argument("--min-judge-overall", type=float, default=DEFAULT_THRESHOLDS["judge_overall"])
+    parser.add_argument("--min-auto-accuracy", type=float, default=DEFAULT_THRESHOLDS["auto_action_accuracy"])
     parser.add_argument("--baseline", type=Path, default=None, help="Prior report JSON to compute deltas against.")
     parser.add_argument("--quiet", action="store_true", help="Suppress the console report (still writes JSON).")
     return parser.parse_args(argv)
@@ -328,6 +359,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             dataset["findings"], predictor, judge_mod.get_judge("deterministic")
         )
 
+    if args.governance or args.all:
+        predictor = predictors.get_predictor(args.predictor)
+        report["governance"] = governance_eval.evaluate_governance(
+            dataset["findings"], predictor
+        )
+        report["governanceSweep"] = governance_eval.sweep_auto_threshold(
+            dataset["findings"], predictor, SWEEP_THRESHOLDS
+        )
+
     if args.gate:
         report["gate"] = apply_gate(report, {
             "severity_accuracy": args.min_severity_accuracy,
@@ -335,6 +375,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "fp_detection_f1": args.min_fp_f1,
             "retrieval_hit_at_k": args.min_retrieval_hitk,
             "judge_overall": args.min_judge_overall,
+            "auto_action_accuracy": args.min_auto_accuracy,
         })
 
     baseline = None

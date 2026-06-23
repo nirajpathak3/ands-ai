@@ -9,6 +9,7 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * POST /ingest                         - normalize a Semgrep/SARIF report and run
                                            every finding through the pipeline
   * GET  /knowledge/search               - retrieve OWASP/CWE guidance (RAG layer)
+  * GET  /audit                          - append-only governance audit trail
   * GET  /approvals                      - list decisions awaiting human approval
   * POST /approvals/{finding_hash}/approve - approve -> create the ticket (HITL)
   * POST /approvals/{finding_hash}/reject  - reject a pending decision
@@ -33,7 +34,7 @@ from .pipeline import run_pipeline
 from .providers import get_ticket_provider
 from .rag import get_retriever
 from .schemas import AnalyzeRequest, Finding
-from .ticketing import ApprovalStore, DeadLetterQueue, EscalationQueue
+from .ticketing import ApprovalStore, AuditLog, DeadLetterQueue, EscalationQueue
 
 app = FastAPI(
     title="AI Security Operations Copilot - Agent Runtime",
@@ -48,6 +49,7 @@ _retriever = get_retriever(get_settings())
 _approvals = ApprovalStore()
 _escalations = EscalationQueue()
 _dead_letter = DeadLetterQueue()
+_audit = AuditLog()
 
 
 @app.get("/health")
@@ -68,6 +70,7 @@ def health() -> dict:
         "governance": {
             "autoThreshold": settings.auto_threshold,
             "suggestThreshold": settings.suggest_threshold,
+            "suppressAutoThreshold": settings.suppress_auto_threshold,
         },
     }
 
@@ -96,13 +99,14 @@ def governance_preview(req: GovernancePreviewRequest) -> dict:
         "disposition": decision.disposition.value,
         "requiresHuman": decision.requires_human,
         "reason": decision.reason,
+        "reasonCode": decision.reason_code.value,
     }
 
 
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest) -> dict:
     """Run a finding through the full walking skeleton and execute the decision."""
-    return run_pipeline(
+    out = run_pipeline(
         req.finding.model_dump(),
         provider=_provider,
         approvals=_approvals,
@@ -110,6 +114,8 @@ def analyze(req: AnalyzeRequest) -> dict:
         dead_letter=_dead_letter,
         retriever=_retriever,
     )
+    _audit.record(out["decision"], out["action"]["outcome"], actor="system")
+    return out
 
 
 class IngestRequest(BaseModel):
@@ -144,6 +150,7 @@ def ingest(req: IngestRequest) -> dict:
             escalations=_escalations, dead_letter=_dead_letter, retriever=_retriever,
         )
         outcome = out["action"]["outcome"]
+        _audit.record(out["decision"], outcome, actor="system")
         summary[outcome] = summary.get(outcome, 0) + 1
         results.append({
             "findingId": out["decision"].get("findingId"),
@@ -191,23 +198,26 @@ def list_approvals() -> dict:
 @app.post("/approvals/{finding_hash}/approve")
 def approve(finding_hash: str) -> dict:
     """Human approves a queued decision -> the ticket is created (HITL gate)."""
+    pending = _approvals.get(finding_hash)
     try:
         ticket, created = _approvals.approve(finding_hash, _provider)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"No pending approval for {finding_hash}"
         ) from None
-    return {
-        "outcome": "ticket_created" if created else "ticket_exists",
-        "approvedBy": "human",
-        "ticket": ticket.to_dict(),
-    }
+    outcome = "ticket_created" if created else "ticket_exists"
+    if pending is not None:
+        _audit.record(pending.decision, outcome, actor="human")
+    return {"outcome": outcome, "approvedBy": "human", "ticket": ticket.to_dict()}
 
 
 @app.post("/approvals/{finding_hash}/reject")
 def reject(finding_hash: str) -> dict:
+    pending = _approvals.get(finding_hash)
     if not _approvals.reject(finding_hash):
         raise HTTPException(status_code=404, detail=f"No pending approval for {finding_hash}")
+    if pending is not None:
+        _audit.record(pending.decision, "rejected", actor="human")
     return {"outcome": "rejected", "findingHash": finding_hash}
 
 
@@ -221,6 +231,13 @@ def list_tickets() -> dict:
 def list_escalations() -> dict:
     items = _escalations.list_all()
     return {"count": len(items), "escalations": items}
+
+
+@app.get("/audit")
+def list_audit() -> dict:
+    """Append-only governance audit trail: why each decision was taken, by whom."""
+    records = _audit.list_all()
+    return {"count": len(records), "records": [r.to_dict() for r in records]}
 
 
 @app.get("/deadletter")

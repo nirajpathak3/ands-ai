@@ -158,11 +158,25 @@ workflow** ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs ruff
 pytest + the eval gate on every push/PR. Run it all with
 `python evals/run_eval.py --predictor runtime --all --gate`.
 
-Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
-FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**.
+**Day 7 complete — governance hardening + audit trail:** the confidence gate is now a
+small, auditable **policy engine** (ADR-005). Auto-execution is **asymmetric by risk**:
+creating a ticket auto-runs at `auto_threshold` (0.90), but **auto-suppressing** a finding
+must clear a stricter `suppress_auto_threshold` (0.95) — dismissing a real vuln is the
+costlier error. Every decision now carries a machine-readable **`reasonCode`**, and an
+append-only **audit trail** (`GET /audit`) records what was decided, why, and by whom
+(`system` vs `human`). Thresholds are **tuned from eval data, not guessed**: a new
+governance eval pass (`evals/governance_eval.py`) reports automation/review/escalation
+rates, **auto-action accuracy** ("when we act without a human, are we right?"), and an
+auto-threshold **sweep** showing the autonomy/safety trade-off. The regression gate now
+also enforces `auto_action_accuracy ≥ 0.99` (no wrong autonomous actions). Run with
+`python evals/run_eval.py --predictor runtime --governance --gate`.
 
-**Next — Day 7:** governance gate hardening (auto vs approval tuning) toward the Day 8
-demo milestone.
+Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
+FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
+governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
+
+**Next — Day 8:** the demo milestone — single-page dashboard wiring the end-to-end flow
+(findings → governed ticketing → metrics) into a memorable walkthrough.
 
 ## Documentation
 

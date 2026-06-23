@@ -21,6 +21,7 @@ API is down), the decision is parked on a dead-letter queue rather than lost, an
 
 from __future__ import annotations
 
+import datetime as _dt
 import itertools
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -178,6 +179,59 @@ class DeadLetterQueue:
 
     def list_all(self) -> list[DeadLetterItem]:
         return list(self._items)
+
+
+@dataclass
+class AuditRecord:
+    """An immutable record of one governed decision (governance + observability).
+
+    The audit trail answers "why did the system (or a human) take this action?" for
+    every finding — the accountability backbone of governed automation.
+    """
+
+    timestamp: str
+    findingHash: str
+    findingId: str | None
+    severity: str
+    recommendedAction: str
+    confidence: float
+    disposition: str
+    reasonCode: str | None
+    outcome: str
+    actor: str  # "system" (autonomous) | "human" (approval/rejection)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class AuditLog:
+    """Append-only governance audit log (in-memory; persisted on Day 10)."""
+
+    def __init__(self) -> None:
+        self._records: list[AuditRecord] = []
+
+    def record(
+        self, decision: Mapping[str, object], outcome: str, *, actor: str = "system"
+    ) -> AuditRecord:
+        analysis = decision.get("analysis") or {}
+        analysis = analysis if isinstance(analysis, Mapping) else {}
+        rec = AuditRecord(
+            timestamp=_dt.datetime.now(_dt.UTC).isoformat(),
+            findingHash=str(decision.get("findingHash", "")),
+            findingId=(str(decision["findingId"]) if decision.get("findingId") else None),
+            severity=str(analysis.get("severity", "unknown")),
+            recommendedAction=str(analysis.get("recommendedAction", "")),
+            confidence=float(analysis.get("confidence", 0.0) or 0.0),
+            disposition=str(decision.get("disposition", "")),
+            reasonCode=(str(decision["reasonCode"]) if decision.get("reasonCode") else None),
+            outcome=outcome,
+            actor=actor,
+        )
+        self._records.append(rec)
+        return rec
+
+    def list_all(self) -> list[AuditRecord]:
+        return list(self._records)
 
 
 @dataclass

@@ -72,6 +72,7 @@ class TicketDecision(BaseModel):
     disposition: Disposition
     requiresHuman: bool
     governanceReason: str
+    reasonCode: str | None = None
     citations: list[Citation] = Field(default_factory=list)
 
 
