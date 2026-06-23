@@ -7,12 +7,16 @@ model would emit). The node then parses + validates that string against
 of times on invalid output and escalating if it still fails.
 
 Two implementations:
-  * ``DeterministicLLM`` (default, Day 2): produces the structured analysis offline
-    via ``analysis.analyze_finding``. No API keys, fully reproducible — the walking
-    skeleton and CI run with this.
-  * ``GatewayLLM`` (Day 11 stub): will POST the prompt to the NestJS AI Gateway
-    (single egress -> OpenAI, Claude fallback, semantic cache, cost/latency). Wired
-    later; the seam exists now so swapping it in changes nothing downstream.
+  * ``DeterministicLLM`` (Day 2): produces the structured analysis offline via
+    ``analysis.analyze_finding``. No API keys, fully reproducible.
+  * ``GatewayLLM`` (Day 11): routes the analysis prompt through the in-process AI Gateway
+    (``app.gateway``) — the single egress that does provider routing, ordered fallback
+    (OpenAI -> Claude -> deterministic), a semantic cache, and cost/latency tracking. With
+    no API keys it resolves to the deterministic provider, so behaviour is identical to
+    ``DeterministicLLM`` while the gateway still records cache/cost/latency metrics.
+
+``get_default_client()`` returns the GatewayLLM, so every analysis flows through the one
+egress; the deterministic fallback keeps the offline path reproducible.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from . import analysis as analysis_core
+from .config import Settings, get_settings
 from .prompts import build_analysis_messages
 from .schemas import AnalysisResult
 
@@ -54,24 +59,39 @@ class DeterministicLLM:
 
 
 class GatewayLLM:
-    """Real LLM via the NestJS AI Gateway. Wired on Day 11 (stub for now)."""
+    """Analysis via the in-process AI Gateway (Day 11, ADR-014).
+
+    Builds the injection-hardened prompt (``prompts.build_analysis_messages``) and sends it
+    through the Gateway, which routes/falls back across providers and tracks cost + latency.
+    The structured finding rides along so the offline deterministic provider can answer with
+    no model call. Returns the raw JSON completion; the node validates it (ADR-010).
+    """
 
     name = "gateway"
 
-    def __init__(self, base_url: str) -> None:
-        self.base_url = base_url
+    def __init__(self, gateway, *, context: str | None = None) -> None:
+        self._gateway = gateway
+        self._context = context
 
     def analyze(self, finding: Finding) -> str:
-        _system, _user = build_analysis_messages(finding)
-        raise NotImplementedError(
-            "GatewayLLM is wired on Day 11. Until then the runtime uses DeterministicLLM. "
-            "It will POST the analysis prompt to the AI Gateway (OpenAI + Claude fallback)."
+        # Imported here to avoid a circular import (gateway imports config; llm too).
+        from .gateway import LLMRequest, Message
+
+        system, user = build_analysis_messages(finding, self._context)
+        req = LLMRequest(
+            messages=[Message(role="system", content=system), Message(role="user", content=user)],
+            task="analysis",
+            finding=finding,
         )
+        return self._gateway.complete(req).response.content
 
 
-def get_default_client() -> LLMClient:
-    """The client the runtime uses today: the offline deterministic analyzer."""
-    return DeterministicLLM()
+def get_default_client(settings: Settings | None = None) -> LLMClient:
+    """The runtime's analysis client: the AI Gateway egress (deterministic fallback)."""
+    from .gateway import get_gateway
+
+    settings = settings or get_settings()
+    return GatewayLLM(get_gateway(settings))
 
 
 def analyze_and_validate(

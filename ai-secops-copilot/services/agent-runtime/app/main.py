@@ -24,6 +24,7 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * POST /approvals/{finding_hash}/reject  - reject a pending decision
   * GET  /tickets                        - list (mock) tickets created so far
   * GET  /escalations                    - list escalated findings
+  * GET  /gateway/metrics                - AI Gateway egress metrics (Day 11)
 
 Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
     python -m uvicorn app.main:app --reload --port 8088
@@ -42,6 +43,7 @@ from pydantic import BaseModel, Field, ValidationError
 from . import __version__
 from .config import get_settings
 from .domain import Action
+from .gateway import get_gateway, reset_gateway
 from .governance import evaluate as governance_evaluate
 from .graph import GraphRunner
 from .ingestion import normalize
@@ -66,6 +68,7 @@ app = FastAPI(
 # Day 10 persists approvals via checkpointing.
 _provider = get_ticket_provider(get_settings())
 _retriever = get_retriever(get_settings())
+_gateway = get_gateway(get_settings())  # single LLM egress (Day 11); metrics accumulate here
 
 # Durable state (Day 10): in-memory by default, SQLite/Postgres when DATABASE_URL is set.
 _state = build_state(get_settings())
@@ -125,7 +128,18 @@ def health() -> dict:
         },
         "orchestration": "langgraph" if _graph_runner is not None else "inline",
         "persistence": _state.backend,
+        "llm": {
+            "egress": "gateway",
+            "providers": _gateway.metrics()["providers"],
+            "cacheEnabled": settings.llm_cache_enabled,
+        },
     }
+
+
+@app.get("/gateway/metrics")
+def gateway_metrics() -> dict:
+    """AI Gateway egress metrics: requests, cache hits, fallbacks, cost, latency (Day 11)."""
+    return _gateway.metrics()
 
 
 class GovernancePreviewRequest(BaseModel):
@@ -332,10 +346,11 @@ def demo_reset() -> dict:
     Postgres backends too — unlike a process restart, which now *keeps* persisted state).
     Idempotent ticket creation means re-seeding never duplicates tickets.
     """
-    global _graph_runner
+    global _graph_runner, _gateway
     _state.clear()          # truncate durable stores in place (any backend)
     if hasattr(_provider, "clear"):
         _provider.clear()   # drop mock tickets so idempotency starts fresh
+    _gateway = reset_gateway(get_settings())  # drop gateway cache + metrics
     _graph_runner = _make_graph_runner()  # fresh checkpointer for the HITL graph
     return {"status": "reset", "backend": _state.backend}
 

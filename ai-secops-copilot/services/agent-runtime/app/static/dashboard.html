@@ -112,6 +112,11 @@
       <div id="approvals"><div class="empty">Nothing waiting.</div></div>
     </section>
   </div>
+
+  <section class="card" style="margin-top:14px">
+    <h2>AI Gateway (single LLM egress &middot; routing, cache, fallback, cost)</h2>
+    <div class="grid kpis" id="gateway" style="margin-bottom:0"></div>
+  </section>
 </main>
 
 <div id="toast"></div>
@@ -208,15 +213,27 @@ async function act(kind, hash) {
   } catch (e) { toast("Error: " + e.message); }
 }
 
+function renderGateway(g) {
+  const providers = (g.providers || []).join(", ") || "—";
+  $("#gateway").innerHTML = [
+    kpiCard("LLM requests", g.totalRequests, `${providers}`),
+    kpiCard("Cache hit rate", pct(g.cacheHitRate), `${g.cacheHits} hits · size ${g.cacheSize}`),
+    kpiCard("Fallback rate", pct(g.fallbackRate), `${g.totalFailures} hard failures`),
+    kpiCard("Est. cost", "$" + (g.totalCostUsd || 0).toFixed(4), `${g.totalTokens} tokens`),
+    kpiCard("Mean latency", g.meanLatencyMs + " ms", "per served call"),
+  ].join("");
+}
+
 async function refresh() {
   try {
-    const [m, findings, approvals, health] = await Promise.all([
-      api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
+    const [m, findings, approvals, health, gw] = await Promise.all([
+      api("/metrics"), api("/findings"), api("/approvals"), api("/health"), api("/gateway/metrics"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
+    renderGateway(gw);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
-      `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"}`;
+      `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;
   } catch (e) { toast("Error: " + e.message); }
 }
 

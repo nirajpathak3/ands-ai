@@ -331,6 +331,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--gate", action="store_true", help="Enable the regression gate (non-zero exit on failure).")
     parser.add_argument("--rag", action="store_true", help="Also evaluate RAG retrieval quality (hit@k, MRR).")
     parser.add_argument("--judge", action="store_true", help="Also run the LLM-as-judge reasoning-quality pass.")
+    parser.add_argument("--judge-model", default="deterministic", help="Judge backend: deterministic (offline, default) | gateway (real LLM via the AI Gateway).")
     parser.add_argument("--governance", action="store_true", help="Also run the governance autonomy/safety pass + threshold sweep.")
     parser.add_argument("--all", action="store_true", help="Run the base eval plus --rag, --judge and --governance.")
     parser.add_argument("--k", type=int, default=3, help="top-k for retrieval evaluation (default 3).")
@@ -356,7 +357,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.judge or args.all:
         predictor = predictors.get_predictor(args.predictor)
         report["judge"] = judge_mod.evaluate_judge(
-            dataset["findings"], predictor, judge_mod.get_judge("deterministic")
+            dataset["findings"], predictor, judge_mod.get_judge(args.judge_model)
         )
 
     if args.governance or args.all:

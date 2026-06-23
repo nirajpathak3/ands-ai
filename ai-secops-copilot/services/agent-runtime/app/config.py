@@ -38,6 +38,24 @@ class Settings:
     # AI Gateway (single LLM egress; the runtime never calls providers directly).
     gateway_base_url: str = os.environ.get("GATEWAY_BASE_URL", "http://localhost:3000")
 
+    # LLM egress (Day 11). The analysis node talks to one Gateway that routes across
+    # providers with ordered fallback, a semantic cache, and cost/latency tracking.
+    # Offline default: the deterministic provider (no keys) — fully reproducible. Real
+    # providers activate only when their API key is present; deterministic is always the
+    # final fallback so the runtime never hard-fails on a provider outage.
+    openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
+    openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    openai_base_url: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
+    anthropic_base_url: str = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    llm_timeout_s: float = _env_float("LLM_TIMEOUT_S", 30.0)
+    # Semantic cache: dedupe near-identical prompts to cut cost/latency (ADR-014).
+    llm_cache_enabled: bool = os.environ.get("LLM_CACHE_ENABLED", "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    llm_cache_similarity: float = _env_float("LLM_CACHE_SIMILARITY", 0.92)
+
     # Governance thresholds (overridable via env; defaults from PRODUCT_VISION.md).
     auto_threshold: float = _env_float("GOVERNANCE_AUTO_THRESHOLD", DEFAULT_AUTO_THRESHOLD)
     suggest_threshold: float = _env_float("GOVERNANCE_SUGGEST_THRESHOLD", DEFAULT_SUGGEST_THRESHOLD)

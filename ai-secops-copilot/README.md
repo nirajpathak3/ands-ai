@@ -222,8 +222,20 @@ Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
 governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
 
-**Next — Day 11:** the AI Gateway — real multi-model LLM egress (routing, semantic cache,
-cost/latency tracking, fallback) behind the existing `LLMClient`/`Judge` seams.
+**Day 11 complete — AI Gateway (single LLM egress):** every model call now flows through one
+in-process gateway (`services/agent-runtime/app/gateway/`) behind the existing `LLMClient`/`Judge`
+seams. It owns **task-aware routing** (cheap model first for triage, stronger model first for the
+judge), **ordered fallback** (OpenAI → Claude → deterministic), a **semantic cache** (lexical
+offline; embeddings in prod), and **cost/latency/token tracking** — surfaced at `GET /gateway/metrics`
+and on the dashboard. With no API keys it resolves to the always-on deterministic provider, so the
+runtime stays fully offline, reproducible, and free; set `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` to
+light up real models, with deterministic as the final fallback so a provider outage degrades instead
+of fails. Verified live: re-seeding identical findings produced a **50% cache hit rate** at $0 cost.
+The Python egress mirrors the NestJS `services/gateway` scaffold (same `llm.types.ts`/`cost.ts`
+contract) so the hybrid Python+Node story is real while the runtime stays testable in one harness.
+
+**Next — Day 12:** observability + ops — structured tracing/metrics export (OpenTelemetry),
+dashboards for gateway cost/latency over time, and alerting on governance/escalation rates.
 
 ## Documentation
 

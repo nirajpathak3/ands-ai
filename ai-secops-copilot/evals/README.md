@@ -63,13 +63,14 @@ python evals/run_eval.py --predictor heuristic
 
 ## Judges (LLM-as-judge)
 
-A *judge* scores reasoning quality. The default runs offline; a real LLM judge slots
-in behind the same seam on Day 11 (mirrors the runtime's `LLMClient`).
+A *judge* scores reasoning quality. The default runs offline; a real LLM judge routes
+through the AI Gateway behind the same seam (mirrors the runtime's `LLMClient`). Select
+with `--judge-model` (default `deterministic`).
 
 | Name            | Status        | Description                                              |
 | --------------- | ------------- | ------------------------------------------------------- |
 | `deterministic` | **available** | Transparent rubric, no API keys; reproducible in CI.    |
-| `gateway`       | planned       | Real LLM judge via the AI Gateway (Day 11).             |
+| `gateway`       | **available** | Real LLM judge via the AI Gateway (needs OPENAI/ANTHROPIC key). |
 
 ## Baseline (heuristic, security-findings-v1, n=50)
 

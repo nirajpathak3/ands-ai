@@ -97,6 +97,22 @@ server; Postgres is the same shape for prod. The checkpointer upgrades from `Mem
 **Tradeoff:** Two store implementations to keep in sync; bounded by a shared interface + tests, and
 the SQLite/Postgres schemas are deliberately identical.
 
+### ADR-014 — AI Gateway: single LLM egress (routing, cache, fallback, cost)
+**Decision:** Route every model call through one in-process **AI Gateway** (`app/gateway/`) behind
+the existing `LLMClient`/`Judge` seams. It owns: **task-aware routing** (cheap model first for
+high-volume `analysis`, stronger model first for `judge`), **ordered fallback** (OpenAI → Claude →
+deterministic), a **semantic cache** (lexical Jaccard offline; cosine-over-embeddings is the prod
+upgrade behind the same `get`/`put`), and **cost/latency/token tracking**. The always-on
+`DeterministicProvider` is the final fallback, so with no API keys the runtime is fully offline,
+reproducible, and free — while the gateway still records cache/cost/latency metrics.
+**Why:** Cost control and observability for LLM spend belong in exactly one place; a single egress
+also makes provider outages a fallback (not an incident) and lets a semantic cache cut spend on
+near-duplicate findings. Keeping it behind the existing seam means nothing downstream changed —
+`get_default_client()` now returns the gateway client and all 112 tests + the eval gate still pass.
+**Tradeoff:** The Python egress mirrors the NestJS `services/gateway` scaffold (same contract,
+`llm.types.ts`/`cost.ts`); the runtime uses the in-process Python gateway so it stays testable in
+the same pytest/eval harness, with the Node service as the equivalent standalone control plane.
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

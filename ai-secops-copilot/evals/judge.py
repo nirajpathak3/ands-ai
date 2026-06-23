@@ -77,23 +77,75 @@ class DeterministicJudge:
         return {"overall": overall, "checks": checks}
 
 
+_JUDGE_SYSTEM = (
+    "You are an evaluator scoring a security triage decision's REASONING QUALITY (not "
+    "whether you agree with it). Return ONLY a JSON object:\n"
+    '{"overall": 0.0-1.0, "checks": {"reason_present": bool, "action_consistent": bool, '
+    '"confidence_calibrated": bool, "grounded": bool}}\n'
+    "- reason_present: a non-trivial explanation exists.\n"
+    "- action_consistent: the action agrees with the stated severity.\n"
+    "- confidence_calibrated: confidence sits in a sane band for the action.\n"
+    "- grounded: the reason references the finding's actual weakness/decision.\n"
+    "overall must equal the mean of the four booleans."
+)
+
+
 class GatewayJudge:
-    """Real LLM judge via the AI Gateway. Wired on Day 11 (stub for now)."""
+    """Real LLM judge via the AI Gateway (Day 11, ADR-014).
+
+    Routes a judge prompt through the same in-process Gateway the runtime uses, so the
+    judge inherits routing, fallback, caching, and cost tracking. Requires a real provider
+    (OPENAI_API_KEY / ANTHROPIC_API_KEY); offline the deterministic provider cannot judge,
+    so use ``DeterministicJudge`` (the default) for no-keys/CI runs.
+    """
 
     name = "gateway"
 
-    def __init__(self, base_url: str) -> None:
-        self.base_url = base_url
+    def __init__(self) -> None:
+        import json as _json
+        import os
+        import sys
+        from pathlib import Path
+
+        runtime = Path(__file__).resolve().parent.parent / "services" / "agent-runtime"
+        if str(runtime) not in sys.path:
+            sys.path.insert(0, str(runtime))
+        from app.config import get_settings
+        from app.gateway import LLMRequest, Message, get_gateway
+
+        self._json = _json
+        self._LLMRequest = LLMRequest
+        self._Message = Message
+        self._gateway = get_gateway(get_settings())
+        if not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+            raise SystemExit(
+                "GatewayJudge needs OPENAI_API_KEY or ANTHROPIC_API_KEY. "
+                "Use --judge-model deterministic for offline/CI runs."
+            )
 
     def score(self, finding: Finding, prediction: Prediction) -> dict:
-        raise NotImplementedError(
-            "GatewayJudge is wired on Day 11; until then the harness uses "
-            "DeterministicJudge (offline rubric)."
+        user = self._json.dumps(
+            {"finding": {k: finding.get(k) for k in ("id", "cwe", "file", "ruleId")},
+             "prediction": prediction},
+            ensure_ascii=False,
         )
+        req = self._LLMRequest(
+            messages=[
+                self._Message(role="system", content=_JUDGE_SYSTEM),
+                self._Message(role="user", content=user),
+            ],
+            task="judge",
+        )
+        raw = self._gateway.complete(req).response.content
+        data = self._json.loads(raw)
+        checks = {k: bool(v) for k, v in (data.get("checks") or {}).items()}
+        overall = float(data.get("overall", sum(checks.values()) / (len(checks) or 1)))
+        return {"overall": overall, "checks": checks}
 
 
 _JUDGES: Dict[str, Callable[[], Judge]] = {
     "deterministic": DeterministicJudge,
+    "gateway": GatewayJudge,
 }
 
 

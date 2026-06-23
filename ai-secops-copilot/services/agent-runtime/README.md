@@ -20,12 +20,14 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 10 — durable persistence: memory → SQLite → Postgres)
+## Status (Day 11 — AI Gateway: single LLM egress)
 
 | Piece | State |
 | --- | --- |
-| **Persistence seam** (audit/approvals/escalations/dead-letter; memory / SQLite / Postgres) | ✅ implemented + tested |
-| **Checkpointer seam** (`MemorySaver` default; `PostgresSaver` when configured) | ✅ implemented + tested |
+| **AI Gateway** (task routing, ordered fallback, **semantic cache**, cost/latency tracking) | ✅ implemented + tested |
+| **Providers** (deterministic offline default; OpenAI + Anthropic when keys present) | ✅ implemented + tested |
+| Persistence seam (audit/approvals/escalations/dead-letter; memory / SQLite / Postgres) | ✅ implemented + tested |
+| Checkpointer seam (`MemorySaver` default; `PostgresSaver` when configured) | ✅ implemented + tested |
 | Compiled LangGraph (conditional routing, checkpointer, human-approval **interrupt/resume**) | ✅ implemented + tested |
 | Operations dashboard (`GET /` → `/dashboard`, KPIs + findings + approvals, one-click seed/reset) | ✅ implemented + tested |
 | **Findings view** (`GET /findings`: current-state, deduped by hash, linked ticket) | ✅ implemented + tested |
@@ -141,6 +143,23 @@ curl localhost:8088/health      # -> "persistence": "sqlite"
 `GET /health` reports the active `persistence` backend; `POST /demo/reset` truncates the
 stores in place (works for every backend).
 
+### AI Gateway (Day 11)
+
+Every model call goes through one egress (`app/gateway/`): task-aware routing, ordered
+fallback (OpenAI → Claude → deterministic), a semantic cache, and cost/latency tracking.
+Offline (no keys) it resolves to the deterministic provider — identical analysis output,
+$0 cost — while still recording metrics:
+
+```bash
+curl localhost:8088/gateway/metrics
+# { "totalRequests": 12, "cacheHits": 6, "cacheHitRate": 0.5, "fallbackRate": 0.0,
+#   "totalCostUsd": 0.0, "providers": ["deterministic"], "meanLatencyMs": 0.19, ... }
+```
+
+Set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` to light up the real providers; the
+deterministic provider stays as the final fallback so a provider outage degrades instead
+of failing. `GET /health` shows the active `llm.providers`.
+
 ## Test
 
 ```bash
@@ -165,6 +184,7 @@ app/
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail
+├─ gateway/         # AI Gateway egress: router / cache / cost / providers / gateway
 ├─ persistence/     # durable state seam: memory / sqlite_store / checkpointer factory
 ├─ config.py        # env-driven settings (incl. DATABASE_URL backend selection)
 ├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)
