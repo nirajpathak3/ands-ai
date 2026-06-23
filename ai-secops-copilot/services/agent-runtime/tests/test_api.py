@@ -73,3 +73,26 @@ def test_demo_seed_then_metrics_reflect_processing():
     assert m["findingsProcessed"] > 0
     # The bundled samples include a critical SQLi -> at least one auto-executed ticket.
     assert m["byDisposition"].get("auto_execute", 0) >= 1
+
+
+def test_demo_seed_is_ticket_idempotent_but_audit_appends():
+    client.post("/demo/reset")
+    first = client.post("/demo/seed").json()
+    after_first = client.get("/metrics").json()
+    client.post("/demo/seed")
+    after_second = client.get("/metrics").json()
+
+    # Re-seeding re-evaluates the same findings -> audit (event log) grows...
+    assert after_second["findingsProcessed"] == 2 * after_first["findingsProcessed"]
+    # ...but idempotent ticket creation means no duplicate tickets.
+    assert after_second["ticketsCreated"] == after_first["ticketsCreated"]
+    assert "semgrep-sample.json" in first["seeded"]
+
+
+def test_demo_reset_clears_state():
+    client.post("/demo/seed")
+    assert client.get("/metrics").json()["findingsProcessed"] > 0
+    assert client.post("/demo/reset").json()["status"] == "reset"
+    cleared = client.get("/metrics").json()
+    assert cleared["findingsProcessed"] == 0
+    assert cleared["ticketsCreated"] == 0

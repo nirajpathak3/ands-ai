@@ -68,8 +68,11 @@ pip install -e ".[dev]"          # core + dev (pytest, ruff)
 ## Run
 
 ```bash
-uvicorn app.main:app --reload --port 8088
+# `python -m` avoids PATH issues on Windows where the uvicorn script isn't exposed
+python -m uvicorn app.main:app --reload --port 8088
 ```
+
+Then open <http://localhost:8088/> for the operations dashboard.
 
 Run a finding through the full pipeline (works with no LLM / no keys):
 

@@ -81,6 +81,7 @@
   <div class="actions">
     <span class="pill" id="provider"></span>
     <button class="ghost" id="refresh">Refresh</button>
+    <button class="ghost" id="reset">Reset</button>
     <button id="seed">Run demo (ingest samples)</button>
   </div>
 </header>
@@ -215,6 +216,11 @@ async function refresh() {
 }
 
 $("#refresh").onclick = refresh;
+$("#reset").onclick = async () => {
+  try { await api("/demo/reset", { method: "POST" }); toast("State cleared."); }
+  catch (e) { toast("Error: " + e.message); }
+  finally { refresh(); }
+};
 $("#seed").onclick = async () => {
   const b = $("#seed"); b.disabled = true; b.textContent = "Seeding…";
   try { await api("/demo/seed", { method: "POST" }); toast("Sample reports ingested."); }

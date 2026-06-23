@@ -180,7 +180,7 @@ ingests the bundled Semgrep + SARIF samples so the canonical story plays instant
 SQLi **auto-creates** a ticket, a medium finding **waits for approval**, clear false positives
 are **auto-suppressed**, and an ambiguous case **escalates**. KPIs come from a new `GET /metrics`
 (pure aggregation over the audit trail; per-finding latency now recorded). Run it with
-`uvicorn app.main:app --port 8088` and open `http://localhost:8088/`.
+`python -m uvicorn app.main:app --port 8088` and open `http://localhost:8088/`.
 
 Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,

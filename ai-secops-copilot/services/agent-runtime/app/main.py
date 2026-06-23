@@ -5,6 +5,7 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /dashboard                      - single-page operations dashboard (Day 8)
   * GET  /metrics                        - platform KPIs (automation rate, latency, ...)
   * POST /demo/seed                      - ingest bundled sample reports (one-click demo)
+  * POST /demo/reset                     - clear in-memory state (fresh demo slate)
   * GET  /health                         - liveness + config snapshot
   * POST /governance/preview             - confidence -> disposition (no LLM)
   * POST /analyze                        - full pipeline: Finding -> analysis ->
@@ -20,8 +21,8 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /tickets                        - list (mock) tickets created so far
   * GET  /escalations                    - list escalated findings
 
-Run locally:
-    uvicorn app.main:app --reload --port 8088
+Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
+    python -m uvicorn app.main:app --reload --port 8088
 """
 
 from __future__ import annotations
@@ -295,6 +296,24 @@ def demo_seed() -> dict:
     if not seeded:
         raise HTTPException(status_code=404, detail="No sample reports found to seed.")
     return {"seeded": list(seeded.keys()), "reports": seeded}
+
+
+@app.post("/demo/reset")
+def demo_reset() -> dict:
+    """Clear in-memory state (audit, approvals, escalations, dead-letters, tickets).
+
+    The audit trail is intentionally append-only, so re-seeding accumulates events.
+    This resets the demo to a clean slate (no persistence, so a process restart does
+    the same). Idempotent ticket creation means re-seeding never duplicates tickets.
+    """
+    global _provider, _approvals, _escalations, _dead_letter, _audit
+    settings = get_settings()
+    _provider = get_ticket_provider(settings)
+    _approvals = ApprovalStore()
+    _escalations = EscalationQueue()
+    _dead_letter = DeadLetterQueue()
+    _audit = AuditLog()
+    return {"status": "reset"}
 
 
 @app.get("/audit")
