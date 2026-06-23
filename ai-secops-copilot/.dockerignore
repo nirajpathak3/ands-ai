@@ -1,0 +1,16 @@
+# Build context = repo root (used by services/agent-runtime/Dockerfile).
+# Keep it small + reproducible; the runtime image needs app/ + datasets/ only.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/.env
+**/var/
+**/*.db
+services/agent-runtime/tests/
+services/gateway/
+.git/
+.github/
+docs/
+**/.DS_Store

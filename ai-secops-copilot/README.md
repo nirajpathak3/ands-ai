@@ -247,8 +247,18 @@ trace trees (`pipeline.run → ingest/finding_analysis/ticket_decision/execute` 
 valid Prometheus exposition, and **zero false alerts offline** (also fixed a fallback-rate bug so a
 provider skipped as *not-configured* no longer counts as a fallback).
 
-**Next — Day 13:** CI/CD hardening & containerization — Docker images for the runtime + gateway,
-docker-compose with Postgres, and the GitHub Actions pipeline wired to the eval gate + image build.
+**Day 13 complete — containerization & CI/CD:** both services now ship as multi-stage, non-root
+Docker images (Python agent-runtime, NestJS gateway), wired into a one-command `docker compose up`
+stack (Postgres/pgvector + Redis + both apps, runnable offline). The GitHub Actions pipeline was
+hardened into three jobs — a Python **3.11/3.12 matrix** (lint + tests + eval gate), a **Node** job
+(gateway lint + build + jest), and an **images** job that builds both containers on every PR and
+publishes them to GHCR on `master` — plus concurrency cancellation, least-privilege permissions,
+dependency caching, and a `Makefile` mirroring CI (`make check`). The runtime image preserves the
+repo layout so containerization needed **zero app code changes**; verified locally that the gateway
+builds and its 5 jest tests pass, the compose/CI YAML is valid, and the Python gate stays green.
+
+**Next — Day 14:** end-to-end demo polish & docs — a scripted walkthrough, a one-command seeded
+demo, architecture diagram refresh, and a recorded run for reviewers.
 
 ## Documentation
 

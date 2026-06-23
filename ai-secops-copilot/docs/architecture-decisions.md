@@ -131,6 +131,21 @@ dependency — deliberate, to preserve the offline-first, zero-setup property; O
 upgrade. (Also fixed a fallback-rate definition: a provider skipped as *not-configured* is not a
 fallback, so the offline deterministic-only path correctly reports 0% fallback.)
 
+### ADR-016 — Containerization & CI/CD
+**Decision:** Ship multi-stage, non-root Docker images for both services (Python agent-runtime,
+NestJS gateway), a `docker compose` stack (Postgres/pgvector + Redis + both app services, runnable
+offline with no keys), and a hardened GitHub Actions pipeline: a Python **matrix** (3.11/3.12) lint
++ test + eval-gate job, a **Node** lint + build + test job for the gateway, and an **images** job
+that builds both containers on every PR and publishes them to GHCR on `master`. Added `concurrency`
+cancellation, least-privilege `permissions`, dependency caching, and a `Makefile` mirroring CI.
+**Why:** Reproducible, scannable artifacts and a gate that blocks regressions are table stakes for a
+security product. Building the images in CI keeps the Dockerfiles honest; the offline compose stack
+makes the whole system runnable with one command for demos and reviewers.
+**Key detail:** the runtime image preserves the repo directory layout under `/app` (and copies
+`datasets/`), so the runtime's repo-root-relative paths resolve unchanged — containerization needed
+**zero application code changes**. The image defaults to the in-memory backend; compose points it at a
+durable SQLite volume, with the Postgres DSN documented as the production switch.
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

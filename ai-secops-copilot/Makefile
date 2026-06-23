@@ -1,42 +1,50 @@
-# Common developer tasks. (Windows users without `make`: run the underlying
-# commands shown for each target, or use Git Bash / WSL.)
+# Developer + ops shortcuts (Day 13). Mirrors what CI runs.
+#   make install   # install the agent-runtime (dev extra)
+#   make check     # lint + tests + eval gate (the full local gate)
+#   make up        # build + start the whole stack via docker compose
 
-.PHONY: help eval eval-gate infra-up infra-down runtime-install runtime-test gateway-install gateway-test test
+RUNTIME := services/agent-runtime
+
+.PHONY: help install lint test eval-tests gate check \
+        docker-runtime docker-gateway docker up down clean
 
 help:
-	@echo "Targets:"
-	@echo "  eval             Run the evaluation harness (heuristic baseline)"
-	@echo "  eval-gate        Run evals with the regression gate (CI)"
-	@echo "  infra-up         Start Postgres (pgvector) + Redis via docker compose"
-	@echo "  infra-down       Stop local infrastructure"
-	@echo "  runtime-install  Install agent-runtime deps (editable + dev extras)"
-	@echo "  runtime-test     Run agent-runtime unit tests"
-	@echo "  gateway-install  Install gateway deps"
-	@echo "  gateway-test     Run gateway unit tests"
-	@echo "  test             Run evals + both service test suites"
+	@echo "install        - pip install -e agent-runtime[dev]"
+	@echo "lint           - ruff check"
+	@echo "test           - agent-runtime pytest"
+	@echo "eval-tests     - evaluation harness self-tests"
+	@echo "gate           - evaluation regression gate (runtime + RAG + judge + governance)"
+	@echo "check          - lint + test + eval-tests + gate (full local gate, == CI)"
+	@echo "docker         - build both container images"
+	@echo "up / down      - docker compose up --build / down"
 
-eval:
-	python evals/run_eval.py
+install:
+	cd $(RUNTIME) && python -m pip install -e ".[dev]"
 
-eval-gate:
-	python evals/run_eval.py --gate
+lint:
+	cd $(RUNTIME) && ruff check .
 
-infra-up:
-	docker compose up -d
+test:
+	cd $(RUNTIME) && pytest -q
 
-infra-down:
+eval-tests:
+	python -m pytest evals -q
+
+gate:
+	python evals/run_eval.py --predictor runtime --all --gate --no-write
+
+check: lint test eval-tests gate
+
+docker-runtime:
+	docker build -f $(RUNTIME)/Dockerfile -t secops-agent-runtime .
+
+docker-gateway:
+	docker build -t secops-gateway services/gateway
+
+docker: docker-runtime docker-gateway
+
+up:
+	docker compose up -d --build
+
+down:
 	docker compose down
-
-runtime-install:
-	cd services/agent-runtime && pip install -e ".[dev]"
-
-runtime-test:
-	cd services/agent-runtime && pytest
-
-gateway-install:
-	cd services/gateway && npm install
-
-gateway-test:
-	cd services/gateway && npm test
-
-test: eval-gate runtime-test gateway-test

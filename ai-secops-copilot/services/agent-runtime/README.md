@@ -20,11 +20,13 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 12 — observability & ops: tracing, metrics, alerting)
+## Status (Day 13 — containerization & CI/CD)
 
 | Piece | State |
 | --- | --- |
-| **Observability** (in-process tracing + structured logs, Prometheus exposition, alert engine) | ✅ implemented + tested |
+| **Container image** (multi-stage, non-root, healthcheck) + **compose** stack | ✅ builds in CI |
+| **CI/CD** (py 3.11/3.12 matrix, Node gateway job, image build + GHCR publish) | ✅ implemented |
+| Observability (in-process tracing + structured logs, Prometheus exposition, alert engine) | ✅ implemented + tested |
 | AI Gateway (task routing, ordered fallback, **semantic cache**, cost/latency tracking) | ✅ implemented + tested |
 | Providers (deterministic offline default; OpenAI + Anthropic when keys present) | ✅ implemented + tested |
 | Persistence seam (audit/approvals/escalations/dead-letter; memory / SQLite / Postgres) | ✅ implemented + tested |
@@ -177,6 +179,28 @@ curl localhost:8088/observability/traces       # recent spans (pipeline.run -> n
 - **Alerting** — transparent threshold rules (env-overridable: `ALERT_ESCALATION_RATE`,
   `ALERT_FALLBACK_RATE`, `ALERT_P95_LATENCY_MS`, `ALERT_COST_PER_REQUEST_USD`,
   `ALERT_APPROVAL_BACKLOG`); firing alerts show on the dashboard and in `/health`.
+
+### Run in Docker (Day 13)
+
+The image is multi-stage and non-root, with a `/health` healthcheck. Build it from the **repo
+root** (so `datasets/` is in the build context):
+
+```bash
+# From ai-secops-copilot/ :
+docker build -f services/agent-runtime/Dockerfile -t secops-agent-runtime .
+docker run --rm -p 8088:8088 secops-agent-runtime          # in-memory (offline)
+# durable SQLite on a mounted volume:
+docker run --rm -p 8088:8088 -e DATABASE_URL=sqlite:////data/secops.db \
+  -v secopsdata:/data secops-agent-runtime
+```
+
+Or bring up the whole stack (Postgres/pgvector + Redis + runtime + gateway):
+
+```bash
+docker compose up -d --build      # dashboard at http://localhost:8088/dashboard
+```
+
+`make check` runs the full local gate (lint + tests + eval gate), exactly what CI runs.
 
 ## Test
 

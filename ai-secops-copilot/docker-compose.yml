@@ -1,13 +1,53 @@
-# Local development infrastructure for the AI Security Operations Copilot.
-# The data stores are consumed from Day 5 (pgvector RAG) and Day 12 (Redis cache).
-# Application services (gateway, agent-runtime) are added to this compose file as
-# they are containerized on later days.
+# Full local stack for the AI Security Operations Copilot (Day 13).
+# Data stores (Postgres/pgvector + Redis) plus the containerized application services
+# (agent-runtime, gateway). Everything runs offline with no API keys.
 #
-#   docker compose up -d        # start postgres + redis
-#   docker compose down         # stop (keeps volumes)
-#   docker compose down -v      # stop and wipe data
+#   docker compose up -d --build       # build + start the whole stack
+#   docker compose up -d postgres redis  # data stores only
+#   docker compose down                # stop (keeps volumes)
+#   docker compose down -v             # stop and wipe data
+#
+# Dashboard: http://localhost:8088/dashboard   Gateway: http://localhost:3000/health
 
 services:
+  agent-runtime:
+    build:
+      context: .                                   # repo root: datasets/ must be in context
+      dockerfile: services/agent-runtime/Dockerfile
+    image: secops-agent-runtime:latest
+    container_name: secops-agent-runtime
+    environment:
+      # Durable SQLite on a named volume (the implemented + tested backend). Swap to
+      # DATABASE_URL=postgresql://secops:secops@postgres:5432/secops for the Postgres path.
+      DATABASE_URL: sqlite:////data/secops.db
+      RAG_ENABLED: "true"
+      GATEWAY_BASE_URL: http://gateway:3000
+      LOG_JSON: "true"
+    ports:
+      - "8088:8088"
+    volumes:
+      - secopsdata:/data
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: services/gateway
+    image: secops-gateway:latest
+    container_name: secops-gateway
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      AGENT_RUNTIME_URL: http://agent-runtime:8088
+      GATEWAY_CACHE_ENABLED: "true"
+      # OPENAI_API_KEY / ANTHROPIC_API_KEY: set to enable real providers (optional).
+    ports:
+      - "3000:3000"
+    depends_on:
+      agent-runtime:
+        condition: service_healthy
+    restart: unless-stopped
+
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: secops-postgres
@@ -19,7 +59,10 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # initdb runs these in order: extensions -> knowledge (RAG) -> runtime state.
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./infra/postgres/knowledge.sql:/docker-entrypoint-initdb.d/02-knowledge.sql:ro
+      - ./infra/postgres/state.sql:/docker-entrypoint-initdb.d/03-state.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U secops -d secops"]
       interval: 10s
@@ -43,3 +86,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  secopsdata:
