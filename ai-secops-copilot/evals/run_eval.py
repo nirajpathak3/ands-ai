@@ -37,8 +37,10 @@ from typing import Dict, List, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import judge as judge_mod  # noqa: E402
 import metrics  # noqa: E402
 import predictors  # noqa: E402
+import retrieval_eval  # noqa: E402
 
 DEFAULT_DATASET = REPO_ROOT / "datasets" / "findings" / "security-findings-v1.json"
 DEFAULT_OUT_DIR = REPO_ROOT / "evals" / "runs"
@@ -50,6 +52,10 @@ DEFAULT_THRESHOLDS = {
     "severity_accuracy": 0.80,
     "action_accuracy": 0.80,
     "fp_detection_f1": 0.0,
+    # Quality gates for the RAG retrieval + LLM-as-judge passes (only enforced
+    # when those passes are computed, i.e. --rag / --judge / --all).
+    "retrieval_hit_at_k": 0.90,
+    "judge_overall": 0.80,
 }
 
 
@@ -157,9 +163,19 @@ def apply_gate(report: dict, thresholds: Dict[str, float]) -> dict:
         "action_accuracy": summary["actionAccuracy"],
         "fp_detection_f1": summary["fpDetection"]["f1"],
     }
+    # Only gate retrieval / judge when those passes were actually computed.
+    retrieval = report.get("retrieval")
+    if isinstance(retrieval, dict) and retrieval.get("available"):
+        actuals["retrieval_hit_at_k"] = retrieval["hitRateAtK"]
+    judge = report.get("judge")
+    if isinstance(judge, dict):
+        actuals["judge_overall"] = judge["overall"]
+
     failures = []
     for key, minimum in thresholds.items():
-        actual = actuals.get(key, 0.0)
+        if key not in actuals:
+            continue  # metric not computed this run -> not gated
+        actual = actuals[key]
         if actual + 1e-9 < minimum:
             failures.append({"metric": key, "actual": actual, "min": minimum})
     return {"enabled": True, "thresholds": thresholds, "passed": not failures, "failures": failures}
@@ -229,6 +245,31 @@ def print_report(report: dict, baseline: Optional[dict]) -> None:
         print(f"  {label:>14}  P={_pct(m['precision'])}  R={_pct(m['recall'])}  "
               f"F1={_pct(m['f1'])}  n={int(m['support'])}")
 
+    retrieval = report.get("retrieval")
+    if isinstance(retrieval, dict):
+        print("-" * 70)
+        print("  RAG retrieval quality (context relevance)")
+        if not retrieval.get("available"):
+            print(f"    skipped: {retrieval.get('reason')}")
+        else:
+            print(f"  {'retriever / k':<28}: {retrieval['retriever']} / {retrieval['k']}")
+            print(f"  {'KB coverage (CWE in KB)':<28}: {_pct(retrieval['coverage'])} "
+                  f"({retrieval['evaluated']}/{retrieval['withCwe']} findings)")
+            print(f"  {'hit@1 / hit@k':<28}: {_pct(retrieval['hitRateAt1'])} / "
+                  f"{_pct(retrieval['hitRateAtK'])}")
+            print(f"  {'MRR':<28}: {retrieval['mrr']:.3f}")
+            if retrieval.get("corpusGaps"):
+                gaps = ", ".join(retrieval["corpusGaps"])
+                print(f"  {'corpus gaps (CWEs to add)':<28}: {gaps}")
+
+    judge = report.get("judge")
+    if isinstance(judge, dict):
+        print("-" * 70)
+        print(f"  LLM-as-judge (judge={judge['judge']}, n={judge['count']})")
+        print(f"  {'overall reasoning score':<28}: {_pct(judge['overall'])}")
+        for name, rate in judge["checkPassRates"].items():
+            print(f"  {('  - ' + name):<28}: {_pct(rate)}")
+
     if report.get("gate", {}).get("enabled"):
         gate = report["gate"]
         print("-" * 70)
@@ -259,9 +300,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR, help="Directory for run reports.")
     parser.add_argument("--no-write", action="store_true", help="Do not persist a report file.")
     parser.add_argument("--gate", action="store_true", help="Enable the regression gate (non-zero exit on failure).")
+    parser.add_argument("--rag", action="store_true", help="Also evaluate RAG retrieval quality (hit@k, MRR).")
+    parser.add_argument("--judge", action="store_true", help="Also run the LLM-as-judge reasoning-quality pass.")
+    parser.add_argument("--all", action="store_true", help="Run the base eval plus --rag and --judge.")
+    parser.add_argument("--k", type=int, default=3, help="top-k for retrieval evaluation (default 3).")
     parser.add_argument("--min-severity-accuracy", type=float, default=DEFAULT_THRESHOLDS["severity_accuracy"])
     parser.add_argument("--min-action-accuracy", type=float, default=DEFAULT_THRESHOLDS["action_accuracy"])
     parser.add_argument("--min-fp-f1", type=float, default=DEFAULT_THRESHOLDS["fp_detection_f1"])
+    parser.add_argument("--min-retrieval-hitk", type=float, default=DEFAULT_THRESHOLDS["retrieval_hit_at_k"])
+    parser.add_argument("--min-judge-overall", type=float, default=DEFAULT_THRESHOLDS["judge_overall"])
     parser.add_argument("--baseline", type=Path, default=None, help="Prior report JSON to compute deltas against.")
     parser.add_argument("--quiet", action="store_true", help="Suppress the console report (still writes JSON).")
     return parser.parse_args(argv)
@@ -272,11 +319,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     dataset = load_dataset(args.dataset)
     report = evaluate(dataset, args.predictor)
 
+    if args.rag or args.all:
+        report["retrieval"] = retrieval_eval.evaluate_retrieval(dataset, k=args.k)
+
+    if args.judge or args.all:
+        predictor = predictors.get_predictor(args.predictor)
+        report["judge"] = judge_mod.evaluate_judge(
+            dataset["findings"], predictor, judge_mod.get_judge("deterministic")
+        )
+
     if args.gate:
         report["gate"] = apply_gate(report, {
             "severity_accuracy": args.min_severity_accuracy,
             "action_accuracy": args.min_action_accuracy,
             "fp_detection_f1": args.min_fp_f1,
+            "retrieval_hit_at_k": args.min_retrieval_hitk,
+            "judge_overall": args.min_judge_overall,
         })
 
     baseline = None

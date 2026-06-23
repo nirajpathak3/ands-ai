@@ -148,8 +148,21 @@ the LLM prompt as a **trusted** block, kept separate from the untrusted finding
 (ADR-011). New `GET /knowledge/search`; `/analyze` responses now include
 `decision.citations`.
 
-**Next — Day 6:** evaluation harness upgrade (DeepEval/RAGAS-style + LLM-as-judge) and
-broader regression gating.
+**Day 6 complete — evaluation upgrade + CI gate:** the harness now also measures
+**RAG retrieval quality** (RAGAS-style context relevance over the real retriever:
+KB coverage, hit@1/hit@k, MRR, plus the list of CWEs missing from the corpus) and runs
+an **LLM-as-judge** reasoning-quality pass behind a swappable `Judge` seam
+(deterministic offline rubric today; real LLM judge on Day 11). The regression gate now
+covers classification **and** retrieval **and** judge scores, and a **GitHub Actions CI
+workflow** ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs ruff +
+pytest + the eval gate on every push/PR. Run it all with
+`python evals/run_eval.py --predictor runtime --all --gate`.
+
+Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
+FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**.
+
+**Next — Day 7:** governance gate hardening (auto vs approval tuning) toward the Day 8
+demo milestone.
 
 ## Documentation
 
