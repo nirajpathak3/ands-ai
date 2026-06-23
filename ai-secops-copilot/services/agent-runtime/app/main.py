@@ -19,15 +19,16 @@ Run locally:
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from . import __version__
 from .config import get_settings
 from .domain import Action
 from .governance import evaluate as governance_evaluate
+from .ingestion import normalize
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
-from .schemas import AnalyzeRequest
+from .schemas import AnalyzeRequest, Finding
 from .ticketing import ApprovalStore, DeadLetterQueue, EscalationQueue
 
 app = FastAPI(
@@ -97,6 +98,56 @@ def analyze(req: AnalyzeRequest) -> dict:
         escalations=_escalations,
         dead_letter=_dead_letter,
     )
+
+
+class IngestRequest(BaseModel):
+    format: str = "auto"  # auto | semgrep | sarif
+    report: dict
+
+
+@app.post("/ingest")
+def ingest(req: IngestRequest) -> dict:
+    """Normalize a raw scanner report (Semgrep/SARIF) and run each finding.
+
+    The Copilot ingests findings; it does not scan. This maps native scanner output
+    to the normalized contract (ADR-007), then drives every finding through the
+    full pipeline and returns a per-finding result plus an outcome summary.
+    """
+    try:
+        normalized = normalize(req.report, req.format)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    results: list[dict] = []
+    skipped: list[dict] = []
+    summary: dict[str, int] = {}
+    for item in normalized:
+        try:
+            finding = Finding.model_validate(item)
+        except ValidationError as exc:
+            skipped.append({"id": item.get("id"), "errors": exc.error_count()})
+            continue
+        out = run_pipeline(
+            finding.model_dump(), provider=_provider, approvals=_approvals,
+            escalations=_escalations, dead_letter=_dead_letter,
+        )
+        outcome = out["action"]["outcome"]
+        summary[outcome] = summary.get(outcome, 0) + 1
+        results.append({
+            "findingId": out["decision"].get("findingId"),
+            "severity": (out["decision"].get("analysis") or {}).get("severity"),
+            "disposition": out["decision"].get("disposition"),
+            "outcome": outcome,
+        })
+
+    return {
+        "received": len(normalized),
+        "processed": len(results),
+        "skipped": len(skipped),
+        "summary": summary,
+        "results": results,
+        "skippedDetail": skipped,
+    }
 
 
 @app.get("/approvals")

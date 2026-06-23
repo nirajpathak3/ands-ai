@@ -4,10 +4,12 @@ The orchestration core of the AI Security Operations Copilot. Models the locked
 flow end to end:
 
 ```text
-ingest (idempotency hash) -> Finding Analysis Node -> Ticket Decision Node
+scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
+  -> Finding Analysis Node -> Ticket Decision Node
   -> Governance Gate -> execute (auto-ticket | approval queue | escalate)
 ```
 
+- **Ingestion** — normalizes raw **Semgrep JSON** and **SARIF v2.1.0** reports into the common finding contract (ADR-007); the Copilot ingests findings, it does not scan. **Implemented.**
 - **Finding Analysis Node** — analyzes a finding into `{severity, confidence, reason, recommendedAction}` through the `LLMClient` seam and **validates the structured output** (Pydantic) before anything acts on it, bounded-retrying on invalid output (ADR-010). Finding text is treated as untrusted input, isolated from instructions (ADR-011). **Implemented.**
 - **Ticket Decision Node + Governance Gate** — maps confidence → disposition (auto-execute / human-approval / escalate). **Implemented.**
 - **Ticketing + HITL** — provider-agnostic ticketing (ADR-008) with idempotent adapters (ADR-009): in-memory **mock** (default), **real Jira** (Cloud REST v3, idempotent via a `finding-<hash>` label search), and a **ServiceNow mock**. Human-approval queue, escalation queue, and a **dead-letter queue** for provider failures. **Implemented.**
@@ -17,16 +19,17 @@ ingest (idempotency hash) -> Finding Analysis Node -> Ticket Decision Node
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 3 — real Jira + provider-agnostic ticketing)
+## Status (Day 4 — Semgrep/SARIF ingestion)
 
 | Piece | State |
 | --- | --- |
 | Domain enums, governance, idempotency, schemas | ✅ implemented + unit-tested |
+| **Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract** | ✅ implemented + tested |
 | Finding analysis (deterministic LLM stand-in) + structured-output validation | ✅ implemented + tested |
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `POST /analyze`, approvals/tickets/escalations/**deadletter** | ✅ working |
+| `POST /analyze`, **`POST /ingest`**, approvals/tickets/escalations/deadletter | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
 
@@ -75,6 +78,11 @@ curl -X POST localhost:8088/analyze -H "content-type: application/json" -d '{
 curl localhost:8088/approvals
 curl -X POST localhost:8088/approvals/<finding_hash>/approve
 
+# Ingest a whole scanner report (Semgrep or SARIF; format auto-detected) and
+# run every finding through the pipeline -> returns an outcome summary:
+curl -X POST localhost:8088/ingest -H "content-type: application/json" \
+  -d "{\"format\":\"auto\",\"report\": $(cat ../../datasets/samples/semgrep-sample.json)}"
+
 # The governance gate in isolation:
 curl -X POST localhost:8088/governance/preview -H "content-type: application/json" \
   -d '{"confidence": 0.95, "recommendedAction": "create_ticket"}'   # -> auto_execute
@@ -83,7 +91,7 @@ curl -X POST localhost:8088/governance/preview -H "content-type: application/jso
 ## Test
 
 ```bash
-pytest                # 34 tests: governance, idempotency, analysis, ticketing, pipeline
+pytest                # 49 tests: governance, idempotency, analysis, ticketing, pipeline, ingestion
 ruff check .
 ```
 
@@ -95,6 +103,7 @@ app/
 ├─ governance.py    # confidence-gated, two-threshold -> three-disposition gate
 ├─ idempotency.py   # finding_hash (duplicate-ticket prevention, ADR-009)
 ├─ schemas.py       # Pydantic structured-output contract (ADR-010)
+├─ ingestion/       # scanner-report adapters: semgrep, sarif, common helpers (ADR-007)
 ├─ analysis.py      # deterministic finding analysis (the offline LLM stand-in)
 ├─ prompts.py       # analysis prompt + prompt-injection isolation (ADR-011)
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
@@ -102,7 +111,7 @@ app/
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> analysis -> gov -> action)
 ├─ config.py        # env-driven settings
-├─ main.py          # FastAPI app (/analyze, /approvals, /tickets, /escalations, /deadletter)
+├─ main.py          # FastAPI app (/analyze, /ingest, /approvals, /tickets, /escalations, /deadletter)
 └─ graph/           # LangGraph: state, nodes, build
 tests/              # unit + end-to-end tests
 ```

@@ -67,6 +67,7 @@ ai-secops-copilot/
 │  └─ planning/                    # Build planning + conversation log
 ├─ datasets/
 │  ├─ findings/security-findings-v1.json   # Golden dataset: 50 labeled findings
+│  ├─ samples/                             # sample Semgrep + SARIF reports for /ingest
 │  └─ schema/security-findings-v1.schema.json  # JSON Schema for the dataset
 ├─ evals/                          # Evaluation harness
 │  ├─ run_eval.py                  # CLI: load → predict → score → report → gate
@@ -126,8 +127,16 @@ instead of losing it. Select with `TICKET_PROVIDER`; it stays offline-by-default
 falls back to `mock` if Jira creds are absent. The Jira adapter is unit-tested with a
 mocked HTTP transport (no live tenant needed).
 
-**Next — Day 4:** Semgrep finding ingestion (map real scanner output to the
-normalized finding contract).
+**Day 4 complete — Semgrep/SARIF ingestion:** raw scanner reports now normalize into
+the common finding contract (ADR-007) via format-detecting adapters — **Semgrep JSON**
+(`semgrep --json`) and **SARIF v2.1.0** (the OASIS interchange format many scanners
+emit). `POST /ingest` auto-detects the format, normalizes every finding (CWE/OWASP/
+severity extraction, stable ids, code snippets), validates each against the contract,
+and drives them through the full pipeline, returning a per-finding result + outcome
+summary. Clean-room sample reports live in [`datasets/samples/`](datasets/samples/).
+The Copilot ingests findings — it does not scan — so no scanner CLI or keys are needed.
+
+**Next — Day 5:** RAG groundwork (Postgres + pgvector) for OWASP/CWE retrieval.
 
 ## Documentation
 

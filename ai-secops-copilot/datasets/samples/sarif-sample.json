@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "semgrep",
+          "rules": [
+            {
+              "id": "dangerous-subprocess-use",
+              "name": "Dangerous subprocess use",
+              "shortDescription": { "text": "OS command injection via shell=True" },
+              "defaultConfiguration": { "level": "error" },
+              "properties": { "tags": ["CWE-78", "OWASP-A03:2021"] }
+            },
+            {
+              "id": "dangerous-subprocess-use-safe",
+              "name": "Subprocess invocation",
+              "shortDescription": { "text": "subprocess invocation detected" },
+              "defaultConfiguration": { "level": "warning" },
+              "properties": { "tags": ["CWE-78"] }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "dangerous-subprocess-use",
+          "level": "error",
+          "message": { "text": "subprocess called with shell=True and user input enables command execution." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/services/exporter.py" },
+                "region": {
+                  "startLine": 88,
+                  "endLine": 88,
+                  "snippet": { "text": "subprocess.run(\"tar -czf backup.tgz \" + user_path, shell=True)" }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "dangerous-subprocess-use-safe",
+          "level": "warning",
+          "message": { "text": "Detected subprocess invocation." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/services/healthcheck.py" },
+                "region": {
+                  "startLine": 14,
+                  "endLine": 14,
+                  "snippet": { "text": "subprocess.run(['ping', '-c', '1', 'localhost'], shell=False, check=True)" }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
