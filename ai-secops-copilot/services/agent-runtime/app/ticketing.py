@@ -102,6 +102,10 @@ class MockTicketProvider:
     def all(self) -> list[Ticket]:
         return list(self._by_hash.values())
 
+    def clear(self) -> None:
+        self._by_hash.clear()
+        self._counter = itertools.count(1)
+
 
 @dataclass
 class PendingApproval:
@@ -137,6 +141,9 @@ class ApprovalStore:
     def reject(self, finding_hash: str) -> bool:
         return self._pending.pop(finding_hash, None) is not None
 
+    def clear(self) -> None:
+        self._pending.clear()
+
 
 class EscalationQueue:
     """Findings routed to a human analyst (ambiguous / low confidence).
@@ -153,6 +160,9 @@ class EscalationQueue:
 
     def list_all(self) -> list[dict]:
         return list(self._items.values())
+
+    def clear(self) -> None:
+        self._items.clear()
 
 
 @dataclass
@@ -183,6 +193,9 @@ class DeadLetterQueue:
 
     def list_all(self) -> list[DeadLetterItem]:
         return list(self._items)
+
+    def clear(self) -> None:
+        self._items.clear()
 
 
 @dataclass
@@ -243,6 +256,9 @@ class AuditLog:
 
     def list_all(self) -> list[AuditRecord]:
         return list(self._records)
+
+    def clear(self) -> None:
+        self._records.clear()
 
 
 @dataclass

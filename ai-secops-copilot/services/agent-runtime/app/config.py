@@ -64,9 +64,33 @@ class Settings:
     jira_project_key: str = os.environ.get("JIRA_PROJECT_KEY", "")
     jira_issue_type: str = os.environ.get("JIRA_ISSUE_TYPE", "Task")
 
-    # Data stores (wired Day 5+; placeholders for now).
+    # Data stores. Persistence backend (Day 10) is derived from DATABASE_URL:
+    #   ""/unset            -> in-memory (offline default)
+    #   sqlite:///path.db   -> durable SQLite (local/CI durability)
+    #   postgresql://...    -> Postgres (production; same SQL schema)
     database_url: str = os.environ.get("DATABASE_URL", "")
     redis_url: str = os.environ.get("REDIS_URL", "")
+
+    @property
+    def persistence_backend(self) -> str:
+        url = (self.database_url or "").strip().lower()
+        if not url:
+            return "memory"
+        if url.startswith("sqlite"):
+            return "sqlite"
+        if url.startswith(("postgres://", "postgresql://")):
+            return "postgres"
+        return "memory"
+
+    @property
+    def sqlite_path(self) -> str:
+        """Filesystem path from a sqlite URL (``sqlite:///x.db`` -> ``x.db``)."""
+        url = (self.database_url or "").strip()
+        if url.startswith("sqlite:///"):
+            return url[len("sqlite:///"):]
+        if url.startswith("sqlite://"):
+            return url[len("sqlite://"):]
+        return url
 
 
 def get_settings() -> Settings:

@@ -84,6 +84,19 @@ separation seen in production security platforms.)
 **Why:** "How do you know it works?" must have a numeric answer; catches regressions before they ship.
 **Tradeoff:** Up-front labeling effort; it is the single biggest credibility multiplier.
 
+### ADR-013 — Pluggable persistence (memory → SQLite → Postgres)
+**Decision:** Put runtime state (audit trail, approvals, escalations, dead-letter) and the
+LangGraph checkpointer behind a persistence seam selected from `DATABASE_URL`: in-memory
+(offline default), durable **SQLite** (local/CI), and **Postgres** in production (same SQL
+schema, `infra/postgres/state.sql`). Stores share one method contract so the runtime is
+backend-agnostic; an unavailable durable backend degrades to memory so the service always starts.
+**Why:** Approvals and the audit trail must survive a restart for a real platform (a paused HITL
+run, a compliance log). SQLite gives genuine, offline-testable durability without standing up a
+server; Postgres is the same shape for prod. The checkpointer upgrades from `MemorySaver` to
+`PostgresSaver` via the same seam when the optional package is present.
+**Tradeoff:** Two store implementations to keep in sync; bounded by a shared interface + tests, and
+the SQLite/Postgres schemas are deliberately identical.
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

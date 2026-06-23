@@ -206,8 +206,24 @@ Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
 governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
 
-**Next — Day 10:** persistence — move approvals/audit/checkpoints off in-memory stores
-(Postgres-backed checkpointer + durable approval/audit tables).
+**Day 10 complete — durable persistence (memory → SQLite → Postgres):** runtime state
+(audit trail, approvals, escalations, dead-letter) and the LangGraph checkpointer now sit
+behind a **persistence seam** (`app/persistence/`) selected from `DATABASE_URL`: in-memory
+(offline default), durable **SQLite** (local/CI), and **Postgres** in production (identical
+schema, `infra/postgres/state.sql`). All stores share one method contract so the runtime is
+backend-agnostic, and an unavailable durable backend degrades to memory so the service always
+starts. Approvals and the audit trail now **survive a restart** (verified: seed 6 findings,
+restart the process, all 6 are still there) — so a paused HITL run and the compliance log are
+no longer lost on a crash. `GET /health` reports the active `persistence` backend; the
+checkpointer upgrades from `MemorySaver` to `PostgresSaver` through the same seam when the
+optional package is installed.
+
+Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
+FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
+governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).
+
+**Next — Day 11:** the AI Gateway — real multi-model LLM egress (routing, semantic cache,
+cost/latency tracking, fallback) behind the existing `LLMClient`/`Judge` seams.
 
 ## Documentation
 

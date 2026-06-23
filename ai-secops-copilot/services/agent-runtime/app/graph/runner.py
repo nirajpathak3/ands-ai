@@ -25,10 +25,13 @@ class GraphRunner:
         approvals: ApprovalStore,
         escalations: EscalationQueue,
         dead_letter: DeadLetterQueue | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
-        from langgraph.checkpoint.memory import MemorySaver
+        if checkpointer is None:
+            from langgraph.checkpoint.memory import MemorySaver
 
-        self._checkpointer = MemorySaver()
+            checkpointer = MemorySaver()
+        self._checkpointer = checkpointer
         self._graph = build_agent_graph(
             provider=provider, approvals=approvals, escalations=escalations,
             dead_letter=dead_letter, checkpointer=self._checkpointer,

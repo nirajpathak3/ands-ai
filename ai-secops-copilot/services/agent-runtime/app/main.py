@@ -46,11 +46,11 @@ from .governance import evaluate as governance_evaluate
 from .graph import GraphRunner
 from .ingestion import normalize
 from .metrics import compute_metrics, project_findings
+from .persistence import build_state, get_checkpointer
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
 from .rag import get_retriever
 from .schemas import AnalyzeRequest, Finding
-from .ticketing import ApprovalStore, AuditLog, DeadLetterQueue, EscalationQueue
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SAMPLES_DIR = _REPO_ROOT / "datasets" / "samples"
@@ -66,10 +66,13 @@ app = FastAPI(
 # Day 10 persists approvals via checkpointing.
 _provider = get_ticket_provider(get_settings())
 _retriever = get_retriever(get_settings())
-_approvals = ApprovalStore()
-_escalations = EscalationQueue()
-_dead_letter = DeadLetterQueue()
-_audit = AuditLog()
+
+# Durable state (Day 10): in-memory by default, SQLite/Postgres when DATABASE_URL is set.
+_state = build_state(get_settings())
+_approvals = _state.approvals
+_escalations = _state.escalations
+_dead_letter = _state.dead_letter
+_audit = _state.audit
 
 
 def _make_graph_runner() -> GraphRunner | None:
@@ -78,6 +81,7 @@ def _make_graph_runner() -> GraphRunner | None:
         return GraphRunner(
             provider=_provider, approvals=_approvals,
             escalations=_escalations, dead_letter=_dead_letter,
+            checkpointer=get_checkpointer(get_settings()),
         )
     except Exception:  # noqa: BLE001 - graph is optional; inline pipeline still works
         return None
@@ -120,6 +124,7 @@ def health() -> dict:
             "suppressAutoThreshold": settings.suppress_auto_threshold,
         },
         "orchestration": "langgraph" if _graph_runner is not None else "inline",
+        "persistence": _state.backend,
     }
 
 
@@ -320,21 +325,19 @@ def demo_seed() -> dict:
 
 @app.post("/demo/reset")
 def demo_reset() -> dict:
-    """Clear in-memory state (audit, approvals, escalations, dead-letters, tickets).
+    """Clear state (audit, approvals, escalations, dead-letters, tickets).
 
-    The audit trail is intentionally append-only, so re-seeding accumulates events.
-    This resets the demo to a clean slate (no persistence, so a process restart does
-    the same). Idempotent ticket creation means re-seeding never duplicates tickets.
+    The audit trail is intentionally append-only, so re-seeding accumulates events; this
+    truncates the stores to a clean slate (in place, so it works for the durable SQLite/
+    Postgres backends too — unlike a process restart, which now *keeps* persisted state).
+    Idempotent ticket creation means re-seeding never duplicates tickets.
     """
-    global _provider, _approvals, _escalations, _dead_letter, _audit, _graph_runner
-    settings = get_settings()
-    _provider = get_ticket_provider(settings)
-    _approvals = ApprovalStore()
-    _escalations = EscalationQueue()
-    _dead_letter = DeadLetterQueue()
-    _audit = AuditLog()
-    _graph_runner = _make_graph_runner()  # rebind to the fresh stores
-    return {"status": "reset"}
+    global _graph_runner
+    _state.clear()          # truncate durable stores in place (any backend)
+    if hasattr(_provider, "clear"):
+        _provider.clear()   # drop mock tickets so idempotency starts fresh
+    _graph_runner = _make_graph_runner()  # fresh checkpointer for the HITL graph
+    return {"status": "reset", "backend": _state.backend}
 
 
 class GraphResumeRequest(BaseModel):

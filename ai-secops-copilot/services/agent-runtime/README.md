@@ -20,11 +20,13 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 9 — compiled LangGraph: routing + checkpointed HITL)
+## Status (Day 10 — durable persistence: memory → SQLite → Postgres)
 
 | Piece | State |
 | --- | --- |
-| **Compiled LangGraph** (conditional routing, checkpointer, human-approval **interrupt/resume**) | ✅ implemented + tested |
+| **Persistence seam** (audit/approvals/escalations/dead-letter; memory / SQLite / Postgres) | ✅ implemented + tested |
+| **Checkpointer seam** (`MemorySaver` default; `PostgresSaver` when configured) | ✅ implemented + tested |
+| Compiled LangGraph (conditional routing, checkpointer, human-approval **interrupt/resume**) | ✅ implemented + tested |
 | Operations dashboard (`GET /` → `/dashboard`, KPIs + findings + approvals, one-click seed/reset) | ✅ implemented + tested |
 | **Findings view** (`GET /findings`: current-state, deduped by hash, linked ticket) | ✅ implemented + tested |
 | **Metrics** (`GET /metrics`: automation/approval/escalation rates, latency, decision events) | ✅ implemented + tested |
@@ -124,6 +126,21 @@ curl -X POST localhost:8088/graph/resume/<thread_id> \
   -H "content-type: application/json" -d '{"approved": true}'      # -> ticket_created
 ```
 
+### Persistence (Day 10)
+
+State (audit trail, approvals, escalations, dead-letter) and the graph checkpointer sit
+behind a seam chosen by `DATABASE_URL`. In-memory is the offline default; point it at
+SQLite for durability that survives a restart (Postgres in prod, same schema):
+
+```bash
+# Durable local run — approvals + audit survive a restart:
+DATABASE_URL=sqlite:///var/secops.db python -m uvicorn app.main:app --port 8088
+curl localhost:8088/health      # -> "persistence": "sqlite"
+```
+
+`GET /health` reports the active `persistence` backend; `POST /demo/reset` truncates the
+stores in place (works for every backend).
+
 ## Test
 
 ```bash
@@ -148,7 +165,8 @@ app/
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail
-├─ config.py        # env-driven settings
+├─ persistence/     # durable state seam: memory / sqlite_store / checkpointer factory
+├─ config.py        # env-driven settings (incl. DATABASE_URL backend selection)
 ├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)
 ├─ static/          # single-page operations dashboard (served at /dashboard)
 └─ graph/           # LangGraph: state, nodes, build (compiled graph), runner (HITL+checkpoint)
