@@ -1,19 +1,22 @@
-"""Mock ticketing + human-approval layer (the walking skeleton's action stage).
+"""Ticketing orchestration + human-approval layer (the action stage).
 
-Day 2 keeps this in-memory and provider-agnostic so the full flow
-(governance decision -> action) runs with no external systems:
+This module owns the provider-agnostic orchestration (ADR-008): the governance
+decision is turned into an action through a ``TicketProvider`` whose concrete
+implementations live in ``app/providers/`` (mock, real Jira, ServiceNow mock).
+The orchestration code here never changes when a provider is swapped.
 
   * AUTO_EXECUTE   -> create a ticket immediately (idempotent).
   * HUMAN_APPROVAL -> queue for a human; a ticket is created only on approval.
   * ESCALATE       -> route to an escalation queue (never auto-ticketed).
 
-Idempotency (ADR-009): tickets are keyed by ``findingHash``. Re-processing the same
-finding (retries, at-least-once delivery) returns the existing ticket instead of
-opening a duplicate.
+Idempotency (ADR-009): every provider keys tickets by ``findingHash``. Re-processing
+the same finding (retries, at-least-once delivery) returns the existing ticket
+instead of opening a duplicate — for the mock that is an in-memory map; for Jira it
+is a JQL search on a ``finding-hash`` label.
 
-On Day 3 the ``TicketProvider`` protocol is implemented by a real Jira adapter and a
-ServiceNow mock behind the MCP tool layer; the governance/pipeline code above does
-not change.
+Resilience (PRODUCT_VISION failure handling): if a provider raises (e.g. the Jira
+API is down), the decision is parked on a dead-letter queue rather than lost, and a
+``ticket_failed`` outcome is returned.
 """
 
 from __future__ import annotations
@@ -33,20 +36,31 @@ class Ticket:
     summary: str
     status: str = "open"
     createdVia: str = "auto"  # "auto" | "approval"
+    provider: str = "mock"
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 class TicketProvider(Protocol):
-    """Provider-agnostic ticket sink (real Jira / ServiceNow mock arrive Day 3)."""
+    """Provider-agnostic ticket sink (mock / Jira / ServiceNow mock)."""
+
+    name: str
 
     def create(self, decision: Mapping[str, object], *, via: str) -> tuple[Ticket, bool]:
+        ...
+
+    def get(self, finding_hash: str) -> Ticket | None:
+        ...
+
+    def all(self) -> list[Ticket]:
         ...
 
 
 class MockTicketProvider:
     """In-memory, idempotent ticket store keyed by ``findingHash``."""
+
+    name = "mock"
 
     def __init__(self, prefix: str = "SEC") -> None:
         self._prefix = prefix
@@ -76,6 +90,7 @@ class MockTicketProvider:
             severity=severity,
             summary=f"[{severity.upper()}] {finding_id}: security finding requires remediation",
             createdVia=via,
+            provider=self.name,
         )
         self._by_hash[finding_hash] = ticket
         return ticket, True
@@ -136,8 +151,39 @@ class EscalationQueue:
 
 
 @dataclass
+class DeadLetterItem:
+    findingHash: str
+    error: str
+    decision: dict
+
+
+class DeadLetterQueue:
+    """Decisions whose ticket action failed (e.g. Jira API down) — never lost.
+
+    A real platform would alert + retry from here; for the MVP we record them so the
+    failure is visible and replayable instead of silently dropped.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[DeadLetterItem] = []
+
+    def add(self, decision: Mapping[str, object], error: str) -> DeadLetterItem:
+        item = DeadLetterItem(
+            findingHash=str(decision.get("findingHash", "")),
+            error=error,
+            decision=dict(decision),
+        )
+        self._items.append(item)
+        return item
+
+    def list_all(self) -> list[DeadLetterItem]:
+        return list(self._items)
+
+
+@dataclass
 class ActionResult:
-    # ticket_created | ticket_exists | suppressed | pending_approval | escalated
+    # ticket_created | ticket_exists | suppressed | pending_approval
+    # | escalated | ticket_failed
     outcome: str
     disposition: str
     findingHash: str
@@ -161,16 +207,17 @@ def _recommended_action(decision: Mapping[str, object]) -> str:
 def execute_decision(
     decision: Mapping[str, object],
     *,
-    provider: MockTicketProvider,
+    provider: TicketProvider,
     approvals: ApprovalStore,
     escalations: EscalationQueue,
+    dead_letter: DeadLetterQueue | None = None,
 ) -> ActionResult:
-    """Carry out a governed decision through the (mock) ticketing layer.
+    """Carry out a governed decision through the ticketing layer.
 
     The governance *disposition* decides the autonomy level; the analysis
     *recommendedAction* decides what is actually executed. A high-confidence
     suppression is auto-applied (no ticket); only a recommended ``create_ticket``
-    ever opens a ticket.
+    ever opens a ticket. Provider failures are dead-lettered, not lost.
     """
     disposition = str(decision.get("disposition", ""))
     finding_hash = str(decision.get("findingHash", ""))
@@ -184,7 +231,18 @@ def execute_decision(
                 findingHash=finding_hash,
                 detail="Auto-suppressed false positive (high confidence); no ticket created.",
             )
-        ticket, created = provider.create(decision, via="auto")
+        try:
+            ticket, created = provider.create(decision, via="auto")
+        except Exception as exc:  # noqa: BLE001 - provider/transport errors are dead-lettered
+            if dead_letter is not None:
+                dead_letter.add(decision, error=f"{type(exc).__name__}: {exc}")
+            return ActionResult(
+                outcome="ticket_failed",
+                disposition=disposition,
+                findingHash=finding_hash,
+                detail=f"Ticket provider '{getattr(provider, 'name', '?')}' failed; "
+                       "decision dead-lettered for retry.",
+            )
         return ActionResult(
             outcome="ticket_created" if created else "ticket_exists",
             disposition=disposition,

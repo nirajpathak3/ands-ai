@@ -41,6 +41,14 @@ class Settings:
     # Bounded re-prompts when the model returns invalid structured output (ADR-010).
     analysis_max_retries: int = int(os.environ.get("ANALYSIS_MAX_RETRIES", "2"))
 
+    # Ticketing (ADR-008): mock (default) | jira | servicenow.
+    ticket_provider: str = os.environ.get("TICKET_PROVIDER", "mock")
+    jira_base_url: str = os.environ.get("JIRA_BASE_URL", "")
+    jira_email: str = os.environ.get("JIRA_EMAIL", "")
+    jira_api_token: str = os.environ.get("JIRA_API_TOKEN", "")
+    jira_project_key: str = os.environ.get("JIRA_PROJECT_KEY", "")
+    jira_issue_type: str = os.environ.get("JIRA_ISSUE_TYPE", "Task")
+
     # Data stores (wired Day 5+; placeholders for now).
     database_url: str = os.environ.get("DATABASE_URL", "")
     redis_url: str = os.environ.get("REDIS_URL", "")

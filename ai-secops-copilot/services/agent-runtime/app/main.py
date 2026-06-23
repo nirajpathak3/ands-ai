@@ -26,8 +26,9 @@ from .config import get_settings
 from .domain import Action
 from .governance import evaluate as governance_evaluate
 from .pipeline import run_pipeline
+from .providers import get_ticket_provider
 from .schemas import AnalyzeRequest
-from .ticketing import ApprovalStore, EscalationQueue, MockTicketProvider
+from .ticketing import ApprovalStore, DeadLetterQueue, EscalationQueue
 
 app = FastAPI(
     title="AI Security Operations Copilot - Agent Runtime",
@@ -35,11 +36,12 @@ app = FastAPI(
     summary="LangGraph agent runtime: Finding Analysis -> Ticket Decision -> Governance Gate.",
 )
 
-# In-memory stores for the walking skeleton. Day 3 swaps the provider for a real
-# Jira adapter (+ ServiceNow mock); Day 10 persists approvals via checkpointing.
-_provider = MockTicketProvider()
+# Provider is selected from config (mock by default; jira/servicenow when set).
+# Day 10 persists approvals via checkpointing.
+_provider = get_ticket_provider(get_settings())
 _approvals = ApprovalStore()
 _escalations = EscalationQueue()
+_dead_letter = DeadLetterQueue()
 
 
 @app.get("/health")
@@ -50,6 +52,7 @@ def health() -> dict:
         "service": settings.service_name,
         "version": __version__,
         "environment": settings.environment,
+        "ticketProvider": getattr(_provider, "name", "unknown"),
         "governance": {
             "autoThreshold": settings.auto_threshold,
             "suggestThreshold": settings.suggest_threshold,
@@ -92,6 +95,7 @@ def analyze(req: AnalyzeRequest) -> dict:
         provider=_provider,
         approvals=_approvals,
         escalations=_escalations,
+        dead_letter=_dead_letter,
     )
 
 
@@ -134,3 +138,13 @@ def list_tickets() -> dict:
 def list_escalations() -> dict:
     items = _escalations.list_all()
     return {"count": len(items), "escalations": items}
+
+
+@app.get("/deadletter")
+def list_dead_letter() -> dict:
+    """Decisions whose ticket action failed (e.g. Jira API down) — replayable."""
+    items = _dead_letter.list_all()
+    return {
+        "count": len(items),
+        "items": [{"findingHash": i.findingHash, "error": i.error} for i in items],
+    }

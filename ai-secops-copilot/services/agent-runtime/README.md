@@ -10,24 +10,40 @@ ingest (idempotency hash) -> Finding Analysis Node -> Ticket Decision Node
 
 - **Finding Analysis Node** — analyzes a finding into `{severity, confidence, reason, recommendedAction}` through the `LLMClient` seam and **validates the structured output** (Pydantic) before anything acts on it, bounded-retrying on invalid output (ADR-010). Finding text is treated as untrusted input, isolated from instructions (ADR-011). **Implemented.**
 - **Ticket Decision Node + Governance Gate** — maps confidence → disposition (auto-execute / human-approval / escalate). **Implemented.**
-- **Ticketing + HITL** — idempotent mock ticket provider, human-approval queue, escalation queue (ADR-009). Real Jira / ServiceNow mock arrive Day 3. **Implemented.**
+- **Ticketing + HITL** — provider-agnostic ticketing (ADR-008) with idempotent adapters (ADR-009): in-memory **mock** (default), **real Jira** (Cloud REST v3, idempotent via a `finding-<hash>` label search), and a **ServiceNow mock**. Human-approval queue, escalation queue, and a **dead-letter queue** for provider failures. **Implemented.**
 
 > **The LLM is a deterministic offline stand-in today** (`app/analysis.py` via
 > `DeterministicLLM`), so the whole pipeline runs with no API keys and is fully
 > reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
 > same `LLMClient` seam — nothing downstream changes.
 
-## Status (Day 2 — walking skeleton complete)
+## Status (Day 3 — real Jira + provider-agnostic ticketing)
 
 | Piece | State |
 | --- | --- |
 | Domain enums, governance, idempotency, schemas | ✅ implemented + unit-tested |
 | Finding analysis (deterministic LLM stand-in) + structured-output validation | ✅ implemented + tested |
-| Mock ticketing, HITL approval queue, escalation queue | ✅ implemented + tested |
-| `POST /analyze` (full end-to-end pipeline) | ✅ working |
-| `GET /health`, `POST /governance/preview`, approvals/tickets/escalations | ✅ working |
+| Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
+| Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
+| HITL approval queue, escalation queue | ✅ implemented + tested |
+| `POST /analyze`, approvals/tickets/escalations/**deadletter** | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |
+
+## Ticket providers
+
+Select with `TICKET_PROVIDER` (default `mock`, runs with no credentials):
+
+```bash
+TICKET_PROVIDER=mock         # in-memory (default)
+TICKET_PROVIDER=servicenow   # in-memory ServiceNow stand-in (ADR-003)
+TICKET_PROVIDER=jira         # real Jira Cloud — set JIRA_* (see .env.example)
+```
+
+Jira needs a free Atlassian Cloud dev site + an API token; if `TICKET_PROVIDER=jira`
+but the `JIRA_*` values are missing, the service logs a warning and falls back to
+`mock` so it still boots. The Jira adapter is unit-tested with a mocked HTTP
+transport, so the full create + idempotency path is verified without a live tenant.
 
 ## Setup
 
@@ -82,10 +98,11 @@ app/
 ├─ analysis.py      # deterministic finding analysis (the offline LLM stand-in)
 ├─ prompts.py       # analysis prompt + prompt-injection isolation (ADR-011)
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
-├─ ticketing.py     # idempotent mock tickets + HITL approval + escalation queues
+├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter
+├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> analysis -> gov -> action)
 ├─ config.py        # env-driven settings
-├─ main.py          # FastAPI app (/analyze, /approvals, /tickets, /escalations)
+├─ main.py          # FastAPI app (/analyze, /approvals, /tickets, /escalations, /deadletter)
 └─ graph/           # LangGraph: state, nodes, build
 tests/              # unit + end-to-end tests
 ```

@@ -19,8 +19,9 @@ from .graph.state import GraphState
 from .llm import LLMClient
 from .ticketing import (
     ApprovalStore,
+    DeadLetterQueue,
     EscalationQueue,
-    MockTicketProvider,
+    TicketProvider,
     execute_decision,
 )
 
@@ -28,9 +29,10 @@ from .ticketing import (
 def run_pipeline(
     finding: Mapping[str, object],
     *,
-    provider: MockTicketProvider,
+    provider: TicketProvider,
     approvals: ApprovalStore,
     escalations: EscalationQueue,
+    dead_letter: DeadLetterQueue | None = None,
     client: LLMClient | None = None,
 ) -> dict:
     """Process one finding end to end and execute the resulting decision.
@@ -47,7 +49,8 @@ def run_pipeline(
 
     decision = state.get("decision", {})
     action = execute_decision(
-        decision, provider=provider, approvals=approvals, escalations=escalations
+        decision, provider=provider, approvals=approvals,
+        escalations=escalations, dead_letter=dead_letter,
     )
 
     return {

@@ -117,8 +117,17 @@ python evals/run_eval.py --predictor runtime --gate \
 > The real test is the LLM on unseen findings once the AI Gateway is wired (Day 11);
 > the eval harness and gate are what make that comparison measurable.
 
-**Next — Day 3:** real Jira integration behind the ticketing layer (with the
-idempotency key), ServiceNow mock adapter.
+**Day 3 complete — real Jira + provider-agnostic ticketing:** the action stage now
+runs behind a `TicketProvider` abstraction (ADR-008) with three idempotent adapters
+(ADR-009) — in-memory **mock** (default), **real Jira Cloud** (REST v3; idempotency
+via a `finding-<hash>` label search that survives restarts), and a **ServiceNow
+mock** — plus a **dead-letter queue** so a provider/API failure parks the decision
+instead of losing it. Select with `TICKET_PROVIDER`; it stays offline-by-default and
+falls back to `mock` if Jira creds are absent. The Jira adapter is unit-tested with a
+mocked HTTP transport (no live tenant needed).
+
+**Next — Day 4:** Semgrep finding ingestion (map real scanner output to the
+normalized finding contract).
 
 ## Documentation
 
