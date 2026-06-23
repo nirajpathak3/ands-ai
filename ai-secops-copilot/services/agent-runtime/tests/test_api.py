@@ -75,18 +75,48 @@ def test_demo_seed_then_metrics_reflect_processing():
     assert m["byDisposition"].get("auto_execute", 0) >= 1
 
 
-def test_demo_seed_is_ticket_idempotent_but_audit_appends():
+def test_metrics_includes_decision_events():
+    assert "decisionEvents" in client.get("/metrics").json()
+
+
+def test_reseeding_dedupes_findings_but_appends_events():
     client.post("/demo/reset")
     first = client.post("/demo/seed").json()
     after_first = client.get("/metrics").json()
     client.post("/demo/seed")
     after_second = client.get("/metrics").json()
 
-    # Re-seeding re-evaluates the same findings -> audit (event log) grows...
-    assert after_second["findingsProcessed"] == 2 * after_first["findingsProcessed"]
-    # ...but idempotent ticket creation means no duplicate tickets.
+    # Current-state findings are deduped -> the count is stable across re-seeds...
+    assert after_second["findingsProcessed"] == after_first["findingsProcessed"]
+    # ...while the append-only audit (decision events) grows...
+    assert after_second["decisionEvents"] == 2 * after_first["decisionEvents"]
+    # ...and idempotent ticket creation means no duplicate tickets.
     assert after_second["ticketsCreated"] == after_first["ticketsCreated"]
     assert "semgrep-sample.json" in first["seeded"]
+
+
+def test_findings_view_dedupes_and_links_tickets():
+    client.post("/demo/reset")
+    client.post("/demo/seed")
+    one = client.get("/findings").json()
+    client.post("/demo/seed")
+    two = client.get("/findings").json()
+
+    # Same set of findings, no duplicate rows on re-seed.
+    assert two["count"] == one["count"]
+    # Re-evaluation is visible as a counter, not a new row.
+    assert max(f["evaluations"] for f in two["findings"]) >= 2
+    # At least one finding carries a linked ticket (the critical SQLi).
+    assert any(f["ticket"] for f in two["findings"])
+
+
+def test_escalation_queue_is_idempotent_across_reseeds():
+    client.post("/demo/reset")
+    client.post("/demo/seed")
+    first = client.get("/escalations").json()["count"]
+    client.post("/demo/seed")
+    second = client.get("/escalations").json()["count"]
+    assert first == second  # re-escalating the same finding does not duplicate
 
 
 def test_demo_reset_clears_state():

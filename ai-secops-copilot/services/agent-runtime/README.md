@@ -24,8 +24,9 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 
 | Piece | State |
 | --- | --- |
-| **Operations dashboard** (`GET /` → `/dashboard`, KPIs + audit + approvals, one-click seed) | ✅ implemented + tested |
-| **Metrics** (`GET /metrics`: automation/approval/escalation rates, latency) | ✅ implemented + tested |
+| **Operations dashboard** (`GET /` → `/dashboard`, KPIs + findings + approvals, one-click seed/reset) | ✅ implemented + tested |
+| **Findings view** (`GET /findings`: current-state, deduped by hash, linked ticket) | ✅ implemented + tested |
+| **Metrics** (`GET /metrics`: automation/approval/escalation rates, latency, decision events) | ✅ implemented + tested |
 | Governance policy engine (asymmetric auto-suppress bar, reason codes) | ✅ implemented + unit-tested |
 | Audit trail (`GET /audit`: who/what/why per decision) | ✅ implemented + tested |
 | Ingestion: Semgrep JSON + SARIF v2.1.0 -> finding contract | ✅ implemented + tested |
@@ -34,7 +35,7 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 | Ticketing adapters: mock, **real Jira (REST v3)**, ServiceNow mock | ✅ implemented + tested |
 | Idempotent create (in-memory map / Jira label search), dead-letter on failure | ✅ implemented + tested |
 | HITL approval queue, escalation queue | ✅ implemented + tested |
-| `GET /dashboard`, `GET /metrics`, `POST /demo/seed`, `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, `GET /audit`, approvals/tickets/escalations/deadletter | ✅ working |
+| `GET /dashboard`, `GET /metrics`, `GET /findings`, `POST /demo/seed`, `POST /demo/reset`, `POST /analyze`, `POST /ingest`, `GET /knowledge/search`, `GET /audit`, approvals/tickets/escalations/deadletter | ✅ working |
 | LangGraph wiring (`app/graph/`) | ✅ nodes implemented (full graph upgrade Day 9) |
 | pgvector retrieval backend (ADR-002) | ⏳ seam in place (offline lexical default) |
 | Real LLM via AI Gateway | ⏳ Day 11 (seam in place) |

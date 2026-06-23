@@ -182,6 +182,13 @@ are **auto-suppressed**, and an ambiguous case **escalates**. KPIs come from a n
 (pure aggregation over the audit trail; per-finding latency now recorded). Run it with
 `python -m uvicorn app.main:app --port 8088` and open `http://localhost:8088/`.
 
+The main table is a **current-state findings view** (`GET /findings`): the append-only audit
+trail is a compliance event log, so the dashboard projects it down to **one row per finding**
+(deduped by `finding_hash`) with its single linked ticket and an "evaluated ×N" counter.
+Re-running the demo therefore updates findings in place — it never duplicates rows or ticket
+links — which is also the idempotency guarantee made visible (events grow, findings/tickets
+don't). A **Reset** button clears the in-memory state for a fresh run.
+
 Current numbers (runtime predictor, n=50): severity **96.0%**, action **100.0%**,
 FP-F1 **100.0%**, retrieval **hit@k 100.0%** (KB coverage **56.0%**), judge **100.0%**,
 governance **auto-action accuracy 100.0%** (34% automated, 60% to humans, 6% escalated).

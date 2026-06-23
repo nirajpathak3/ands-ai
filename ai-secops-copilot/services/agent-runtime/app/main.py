@@ -14,6 +14,7 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * POST /ingest                         - normalize a Semgrep/SARIF report and run
                                            every finding through the pipeline
   * GET  /knowledge/search               - retrieve OWASP/CWE guidance (RAG layer)
+  * GET  /findings                       - current-state findings (deduped) + tickets
   * GET  /audit                          - append-only governance audit trail
   * GET  /approvals                      - list decisions awaiting human approval
   * POST /approvals/{finding_hash}/approve - approve -> create the ticket (HITL)
@@ -40,7 +41,7 @@ from .config import get_settings
 from .domain import Action
 from .governance import evaluate as governance_evaluate
 from .ingestion import normalize
-from .metrics import compute_metrics
+from .metrics import compute_metrics, project_findings
 from .pipeline import run_pipeline
 from .providers import get_ticket_provider
 from .rag import get_retriever
@@ -314,6 +315,28 @@ def demo_reset() -> dict:
     _dead_letter = DeadLetterQueue()
     _audit = AuditLog()
     return {"status": "reset"}
+
+
+@app.get("/findings")
+def list_findings() -> dict:
+    """Current-state findings (deduped by finding_hash), each with its linked ticket.
+
+    This is the materialized view over the append-only audit trail: re-ingesting the
+    same report updates a finding in place (and bumps its `evaluations` count) instead
+    of adding a duplicate row. A finding has at most one ticket (idempotency), so a
+    Jira/ServiceNow link shows exactly once here.
+    """
+    findings = project_findings(_audit.list_all())
+    pending = {p.findingHash for p in _approvals.list_pending()}
+    for f in findings:
+        ticket = _provider.get(f["findingHash"])
+        f["ticket"] = (
+            {"key": ticket.key, "provider": ticket.provider, "status": ticket.status}
+            if ticket is not None else None
+        )
+        f["pendingApproval"] = f["findingHash"] in pending
+    findings.sort(key=lambda f: f["lastUpdated"], reverse=True)
+    return {"count": len(findings), "findings": findings}
 
 
 @app.get("/audit")

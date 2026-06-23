@@ -139,16 +139,20 @@ class ApprovalStore:
 
 
 class EscalationQueue:
-    """Findings routed to a human analyst (ambiguous / low confidence)."""
+    """Findings routed to a human analyst (ambiguous / low confidence).
+
+    Idempotent by ``findingHash`` (consistent with tickets/approvals): re-escalating
+    the same finding updates the entry in place rather than appending a duplicate.
+    """
 
     def __init__(self) -> None:
-        self._items: list[dict] = []
+        self._items: dict[str, dict] = {}
 
     def add(self, decision: Mapping[str, object]) -> None:
-        self._items.append(dict(decision))
+        self._items[str(decision.get("findingHash", ""))] = dict(decision)
 
     def list_all(self) -> list[dict]:
-        return list(self._items)
+        return list(self._items.values())
 
 
 @dataclass
