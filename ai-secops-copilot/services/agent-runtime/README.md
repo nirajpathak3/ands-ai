@@ -31,10 +31,11 @@ python scripts/demo_walkthrough.py        # (or: make demo)
 
 See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
 
-## Status (Day 17 — notifications & webhooks)
+## Status (Day 18 — scheduled jobs & background workers)
 
 | Piece | State |
 | --- | --- |
+| **Scheduler** (`app/scheduler.py`: asyncio jobs — SLA sweep, reconcile, DLQ retry; on-demand + periodic) | ✅ implemented + tested |
 | **Notifications & webhooks** (`app/notifications.py`: log/Slack/webhook channels, HMAC inbound sync) | ✅ implemented + tested |
 | **Remediation & SLA** (`app/remediation.py`: SLA timers, MTTR, remediation view + sync) | ✅ implemented + tested |
 | **Multi-tenancy** (`app/tenancy.py`: per-tenant state/provider/gateway/graph; SQLite per-tenant file) | ✅ implemented + tested |
@@ -245,6 +246,21 @@ curl -X POST localhost:8088/remediation/sync
 age, time-to-due, and MTTR for resolved items, plus a summary (open vs resolved, breach/at-risk
 counts, SLA compliance, mean MTTR). The dashboard renders this with a one-click **Resolve**.
 
+### Background jobs (Day 18)
+
+Periodic maintenance runs in-process (no broker). Jobs are runnable on demand even with the
+scheduler off (the default), which is how the tests and demo drive them:
+
+```bash
+curl localhost:8088/jobs                       # status: intervals, run/error counts, last result
+curl -X POST localhost:8088/jobs/run/sla_sweep         # detect SLA breaches -> notify
+curl -X POST localhost:8088/jobs/run/provider_reconcile  # resolved tickets -> finding state
+curl -X POST localhost:8088/jobs/run/deadletter_retry    # replay failed ticket actions
+
+# Enable the periodic loops (start from the FastAPI lifespan):
+SCHEDULER_ENABLED=true python -m uvicorn app.main:app --port 8088
+```
+
 ### Notifications & webhooks (Day 17)
 
 Human-actionable events (escalation, approval-required, SLA breach, ticket resolved) are
@@ -309,6 +325,7 @@ app/
 ├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter/audit
 ├─ remediation.py   # SLA policy + ticket lifecycle + remediation view/MTTR (Day 16, ADR-018)
 ├─ notifications.py # outbound channels (log/Slack/webhook) + inbound webhook parsing (Day 17)
+├─ scheduler.py     # in-process asyncio scheduler + background jobs (Day 18, ADR-020)
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail

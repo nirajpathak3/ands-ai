@@ -398,4 +398,5 @@ flowchart TB
 | Tenancy/auth | — | **Per-tenant isolated state** + API-key/HS256-JWT auth + rate limiting (Day 15, ADR-017); off by default |
 | Lifecycle | open ticket only | **Ticket lifecycle sync + SLA/MTTR remediation tracking** (Day 16, ADR-018); `transition()` + `/remediation` |
 | Notifications | — | **Outbound channels (log/Slack/webhook) + inbound HMAC webhooks** for real-time sync (Day 17, ADR-019) |
+| Background work | — | **In-process asyncio scheduler** (SLA sweep, reconcile, DLQ retry); on-demand + opt-in periodic (Day 18, ADR-020) |
 | Run | — | `python scripts/demo_walkthrough.py` (offline) · `docker compose up` (full stack) |

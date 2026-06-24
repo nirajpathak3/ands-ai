@@ -138,6 +138,14 @@ class Settings:
     webhook_secret: str = os.environ.get("WEBHOOK_SECRET", "")
     webhook_timeout_s: float = _env_float("WEBHOOK_TIMEOUT_S", 5.0)
 
+    # Scheduled jobs / background workers (Day 18, ADR-020). Off by default so tests and
+    # the offline demo stay deterministic (jobs are still runnable on demand via the API);
+    # set SCHEDULER_ENABLED=true to run them periodically in-process. Intervals are seconds.
+    scheduler_enabled: bool = _env_bool("SCHEDULER_ENABLED", False)
+    sla_sweep_interval_s: float = _env_float("SLA_SWEEP_INTERVAL_S", 60.0)
+    reconcile_interval_s: float = _env_float("RECONCILE_INTERVAL_S", 120.0)
+    deadletter_retry_interval_s: float = _env_float("DEADLETTER_RETRY_INTERVAL_S", 120.0)
+
     @property
     def api_keys(self) -> dict[str, str]:
         """Parse ``API_KEYS`` into a ``{api_key: tenant_id}`` mapping."""

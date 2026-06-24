@@ -217,6 +217,32 @@ back them with a broker + DLQ, reusing the Day-9 dead-letter pattern); the sweep
 rather than a scheduler; and the notification buffer is in-memory (transient operator signal,
 not a compliance record — the audit trail remains the durable source of truth).
 
+### ADR-020 — Scheduled jobs & background workers (in-process scheduler)
+**Decision:** Run periodic maintenance work inside the agent-runtime with a small,
+dependency-free asyncio scheduler (`app/scheduler.py`) rather than introducing Celery/Redis
+or relying on external cron. Three jobs encode the recurring ops chores: `sla_sweep`
+(detect SLA breaches → notify), `provider_reconcile` (pull resolved tickets back into finding
+state), and `deadletter_retry` (replay decisions whose ticket action previously failed). Each
+job is a plain `async` callable returning a small result dict; the scheduler tracks run/error
+counts, timing, and last result so the work is observable (`GET /jobs`), guards every run with
+a per-job lock (a manual trigger and a periodic tick never overlap), and isolates failures so
+one bad run never kills the loop. The exact same code path is exposed for **on-demand** runs
+(`POST /jobs/run/{name}`), which keeps the behavior fully testable/demoable without waiting on
+a timer. The periodic loops start from the FastAPI **lifespan** only when
+`SCHEDULER_ENABLED=true`; jobs are *registered* at import so on-demand runs and tests work with
+the scheduler off (the offline/test default), keeping runs deterministic. Jobs fan out over
+every active tenant via the registry and reuse the Day 16/17 helpers (one source of truth).
+**Why:** SLA paging, lifecycle reconciliation, and failure replay are inherently periodic; a
+pull-based, in-process worker delivers them with zero new infrastructure and stays honest with
+the rest of the offline-first design. Separating *registration* (import) from *starting*
+(lifespan, opt-in) is what lets the same machinery be a background worker in production and a
+synchronous, deterministic unit under test.
+**Tradeoff:** A single-process scheduler has no cross-replica coordination — running multiple
+instances would double the work. The production path is a real broker + leader election (or a
+distributed scheduler), and durable per-job run history; the job *functions* are already
+broker-agnostic, so only the trigger changes. Job state is in-memory operator telemetry, not a
+compliance record (the audit trail remains the source of truth).
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

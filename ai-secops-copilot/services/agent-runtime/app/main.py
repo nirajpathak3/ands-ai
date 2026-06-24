@@ -35,6 +35,8 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /notifications                  - recent outbound notifications + channels (Day 17)
   * POST /notifications/sweep            - detect SLA breaches and fire notifications
   * POST /webhooks/tickets               - inbound provider webhook (real-time sync)
+  * GET  /jobs                           - background-job status (Day 18)
+  * POST /jobs/run/{name}                - run a background job once, on demand
 
 Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
     python -m uvicorn app.main:app --reload --port 8088
@@ -44,6 +46,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
@@ -72,17 +75,30 @@ from .pipeline import run_pipeline
 from .rag import get_retriever
 from .ratelimit import get_rate_limiter
 from .remediation import RESOLVED_STATUSES, VALID_STATUSES, build_remediation
+from .scheduler import Scheduler
 from .schemas import AnalyzeRequest, Finding
 from .tenancy import TenantContext, TenantRegistry
+from .ticketing import execute_decision
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SAMPLES_DIR = _REPO_ROOT / "datasets" / "samples"
 _DASHBOARD_HTML = Path(__file__).resolve().parent / "static" / "dashboard.html"
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the background scheduler on boot (if enabled) and stop it on shutdown."""
+    _register_jobs()
+    if get_settings().scheduler_enabled:
+        _scheduler.start()
+    yield
+    await _scheduler.stop()
+
+
 app = FastAPI(
     title="AI Security Operations Copilot - Agent Runtime",
     version=__version__,
     summary="LangGraph agent runtime: Finding Analysis -> Ticket Decision -> Governance Gate.",
+    lifespan=lifespan,
 )
 
 configure_logging(get_settings())  # structured JSON logs + trace context (Day 12)
@@ -98,6 +114,10 @@ _tracer = get_tracer(get_settings())
 # lazily. With auth disabled every request resolves to ``default_tenant``.
 _registry = TenantRegistry(get_settings())
 _rate_limiter = get_rate_limiter()
+
+# In-process background scheduler (Day 18); jobs are registered at import so on-demand runs
+# work in tests/offline, and the periodic loops start only when SCHEDULER_ENABLED=true.
+_scheduler = Scheduler()
 
 
 _SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -695,6 +715,15 @@ def transition_ticket(
     return {"ticket": ticket.to_dict(), "resolved": resolved}
 
 
+def _reconcile_resolved(ctx: TenantContext) -> int:
+    """Record resolution for any terminal-status ticket not yet marked resolved."""
+    reconciled = 0
+    for t in ctx.provider.all():
+        if t.status in RESOLVED_STATUSES and _record_resolution(ctx, t.findingHash):
+            reconciled += 1
+    return reconciled
+
+
 @app.post("/remediation/sync")
 def remediation_sync(ctx: CtxDep) -> dict:
     """Reconcile findings with resolved tickets (e.g. after polling a real provider).
@@ -703,11 +732,7 @@ def remediation_sync(ctx: CtxDep) -> dict:
     terminal state whose finding isn't yet marked resolved — so an out-of-band closure
     (a developer closing the Jira issue) flows back into the platform's state.
     """
-    reconciled = 0
-    for t in ctx.provider.all():
-        if t.status in RESOLVED_STATUSES and _record_resolution(ctx, t.findingHash):
-            reconciled += 1
-    return {"reconciled": reconciled}
+    return {"reconciled": _reconcile_resolved(ctx)}
 
 
 # --- Day 17: notifications & webhooks ---------------------------------------
@@ -723,13 +748,8 @@ def list_notifications(ctx: CtxDep, limit: int = 50) -> dict:
     }
 
 
-@app.post("/notifications/sweep")
-def notifications_sweep(ctx: CtxDep) -> dict:
-    """Detect SLA breaches now and fire a (deduped) ``sla_breach`` notification each.
-
-    Designed to be called on a schedule (or on dashboard refresh): turns the passive SLA
-    view into active paging without a background worker.
-    """
+def _sweep_breaches(ctx: TenantContext) -> dict:
+    """Detect SLA breaches and fire a (deduped) ``sla_breach`` notification for each."""
     findings = project_findings(ctx.audit.list_all())
     by_hash = {f["findingHash"]: f for f in findings}
     tickets = [t.to_dict() for t in ctx.provider.all()]
@@ -748,6 +768,16 @@ def notifications_sweep(ctx: CtxDep) -> dict:
         if fired is not None:
             notified += 1
     return {"breaches": len(breaches), "notified": notified}
+
+
+@app.post("/notifications/sweep")
+def notifications_sweep(ctx: CtxDep) -> dict:
+    """Detect SLA breaches now and fire a (deduped) ``sla_breach`` notification each.
+
+    Designed to be called on a schedule (or on dashboard refresh): turns the passive SLA
+    view into active paging without a background worker.
+    """
+    return _sweep_breaches(ctx)
 
 
 class WebhookResponse(BaseModel):
@@ -799,3 +829,100 @@ async def ticket_webhook(request: Request, settings: _SettingsDep) -> WebhookRes
         ok=True, tenant=tenant, findingHash=finding_hash,
         status=status, resolved=resolved,
     )
+
+
+# --- Day 18: scheduled jobs / background workers ----------------------------
+
+def _retry_dead_letters(ctx: TenantContext) -> dict:
+    """Replay dead-lettered decisions through the ticketing layer.
+
+    Drains the queue and re-runs each decision; ``execute_decision`` re-adds any that fail
+    again (e.g. the provider is still down), so the operation is safe to repeat.
+    """
+    items = ctx.dead_letter.list_all()
+    if not items:
+        return {"retried": 0, "recovered": 0}
+    ctx.dead_letter.clear()
+    retried = recovered = 0
+    for item in items:
+        retried += 1
+        result = execute_decision(
+            item.decision, provider=ctx.provider, approvals=ctx.approvals,
+            escalations=ctx.escalations, dead_letter=ctx.dead_letter,
+        )
+        if result.outcome != "ticket_failed":
+            recovered += 1
+    return {"retried": retried, "recovered": recovered}
+
+
+def _for_each_tenant(fn) -> dict:
+    """Run a per-tenant chore across every active tenant and aggregate the counters."""
+    tenants = _registry.ids()
+    totals: dict[str, int] = {}
+    for tid in tenants:
+        result = fn(_registry.get(tid))
+        for key, value in result.items():
+            if isinstance(value, int):
+                totals[key] = totals.get(key, 0) + value
+    return {"tenants": len(tenants), **totals}
+
+
+async def _job_sla_sweep() -> dict:
+    return _for_each_tenant(_sweep_breaches)
+
+
+async def _job_provider_reconcile() -> dict:
+    return _for_each_tenant(lambda ctx: {"reconciled": _reconcile_resolved(ctx)})
+
+
+async def _job_deadletter_retry() -> dict:
+    return _for_each_tenant(_retry_dead_letters)
+
+
+_JOBS_REGISTERED = False
+
+
+def _register_jobs() -> None:
+    """Register the periodic jobs (idempotent; called at import and on lifespan start)."""
+    global _JOBS_REGISTERED
+    if _JOBS_REGISTERED:
+        return
+    settings = get_settings()
+    _scheduler.register("sla_sweep", settings.sla_sweep_interval_s, _job_sla_sweep)
+    _scheduler.register(
+        "provider_reconcile", settings.reconcile_interval_s, _job_provider_reconcile
+    )
+    _scheduler.register(
+        "deadletter_retry", settings.deadletter_retry_interval_s, _job_deadletter_retry
+    )
+    _JOBS_REGISTERED = True
+
+
+@app.get("/jobs")
+def list_jobs() -> dict:
+    """Background-job status: interval, run/error counts, last result + timing (Day 18)."""
+    settings = get_settings()
+    return {
+        "schedulerEnabled": settings.scheduler_enabled,
+        "running": _scheduler.is_running,
+        "jobs": _scheduler.status(),
+    }
+
+
+@app.post("/jobs/run/{name}")
+async def run_job_now(name: str) -> dict:
+    """Run a background job once, on demand (no waiting for the timer).
+
+    The same code path the periodic loop uses — handy for demos, ops, and tests. Operates
+    across all active tenants; in production this would be an admin-scoped action.
+    """
+    try:
+        state = await _scheduler.run_job(name)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"No such job '{name}'. Known: {_scheduler.names}"
+        ) from None
+    return state.to_dict()
+
+
+_register_jobs()

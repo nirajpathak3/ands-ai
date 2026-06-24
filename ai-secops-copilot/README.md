@@ -310,8 +310,21 @@ ServiceNow payloads for real-time lifecycle sync (a developer closing the ticket
 back to a resolved finding), verified by an HMAC-SHA256 `X-Signature` when `WEBHOOK_SECRET` is
 set. 16 new tests; 163 total + eval gate green.
 
-**Next — Day 18:** scheduled jobs & background workers — a lightweight scheduler for periodic
-SLA sweeps, provider polling/reconciliation, and dead-letter retries (no external broker).
+**Day 18 complete — scheduled jobs & background workers:** periodic ops chores now run inside
+the runtime via a small, dependency-free asyncio scheduler (`app/scheduler.py`, ADR-020) — no
+Celery/Redis/cron. Three jobs: `sla_sweep` (detect breaches → notify), `provider_reconcile`
+(pull resolved tickets back into finding state), and `deadletter_retry` (replay failed ticket
+actions). Each run is observable (`GET /jobs`: run/error counts, timing, last result), guarded
+by a per-job lock, and failure-isolated so one bad run never kills the loop. The same code path
+runs **on demand** (`POST /jobs/run/{name}`) so it's fully testable/demoable without waiting on
+a timer; the periodic loops start from the FastAPI lifespan only when `SCHEDULER_ENABLED=true`
+(jobs are registered at import, so on-demand + tests work with the scheduler off). Jobs fan out
+across all active tenants and reuse the Day 16/17 helpers. 11 new tests; 174 total + eval gate
+green.
+
+**Next — Day 19:** policy-as-code & suppression rules — a declarative rule layer (per
+tenant/severity/rule-id) to auto-suppress, force-escalate, or override governance, evaluated in
+the pipeline with a full audit trail.
 
 ## Documentation
 

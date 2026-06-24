@@ -146,6 +146,15 @@
   </section>
 
   <section class="card" style="margin-top:14px">
+    <h2>Background jobs <span class="pill" id="jobsState"></span></h2>
+    <table>
+      <thead><tr><th>Job</th><th>Every</th><th>Runs</th><th>Last status</th>
+        <th>Last result</th><th></th></tr></thead>
+      <tbody id="jobs"><tr><td class="empty" colspan="6">No jobs registered.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card" style="margin-top:14px">
     <h2>AI Gateway (single LLM egress &middot; routing, cache, fallback, cost)</h2>
     <div class="grid kpis" id="gateway" style="margin-bottom:0"></div>
     <div style="margin-top:14px">
@@ -317,6 +326,40 @@ function renderNotifications(data) {
     </div>`).join("");
 }
 
+function renderJobs(data) {
+  $("#jobsState").textContent = data.schedulerEnabled
+    ? (data.running ? "scheduler running" : "enabled (idle)")
+    : "on-demand (scheduler off)";
+  const jobs = data.jobs || [];
+  if (!jobs.length) { $("#jobs").innerHTML = `<tr><td class="empty" colspan="6">No jobs registered.</td></tr>`; return; }
+  const fmtEvery = (s) => (s >= 60 ? (s / 60) + "m" : s + "s");
+  $("#jobs").innerHTML = jobs.map((j) => {
+    const status = j.last_status
+      ? `<span class="chip ${j.last_status === "ok" ? "on_track" : "breached"}">${j.last_status}</span>`
+      : "—";
+    const result = j.last_result ? JSON.stringify(j.last_result) : "—";
+    return `
+    <tr>
+      <td class="mono">${j.name}</td>
+      <td class="mono">${fmtEvery(j.interval_s)}</td>
+      <td class="mono">${j.runs}${j.errors ? " / " + j.errors + " err" : ""}</td>
+      <td>${status}</td>
+      <td class="mono">${result}</td>
+      <td class="row-actions"><button data-job="${j.name}">Run now</button></td>
+    </tr>`;
+  }).join("");
+  document.querySelectorAll("[data-job]").forEach((b) =>
+    b.onclick = () => runJob(b.getAttribute("data-job")));
+}
+
+async function runJob(name) {
+  try {
+    const s = await api(`/jobs/run/${name}`, { method: "POST" });
+    toast(`Ran ${name}: ${JSON.stringify(s.last_result || {})}`);
+    refresh();
+  } catch (e) { toast("Error: " + e.message); }
+}
+
 function renderGateway(g) {
   const providers = (g.providers || []).join(", ") || "—";
   $("#gateway").innerHTML = [
@@ -347,14 +390,14 @@ function renderSpark(recent) {
 async function refresh() {
   try {
     await api("/notifications/sweep", { method: "POST" }).catch(() => ({}));
-    const [m, findings, approvals, health, gw, al, ts, rem, notif] = await Promise.all([
+    const [m, findings, approvals, health, gw, al, ts, rem, notif, jobs] = await Promise.all([
       api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
       api("/gateway/metrics"), api("/observability/alerts"), api("/observability/timeseries"),
-      api("/remediation"), api("/notifications"),
+      api("/remediation"), api("/notifications"), api("/jobs"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
     renderGateway(gw); renderAlerts(al.alerts); renderSpark(ts.recentLlm);
-    renderRemediation(rem); renderNotifications(notif);
+    renderRemediation(rem); renderNotifications(notif); renderJobs(jobs);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
       `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;
