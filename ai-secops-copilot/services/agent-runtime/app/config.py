@@ -127,6 +127,17 @@ class Settings:
     # Per-tenant fixed-window rate limit (requests/minute). 0 disables limiting.
     rate_limit_rpm: int = int(os.environ.get("RATE_LIMIT_RPM", "0"))
 
+    # Notifications & webhooks (Day 17, ADR-019). The log channel is always on (offline
+    # default); Slack/generic-webhook channels activate only when their URL is set, so the
+    # dev/offline experience needs no external services. Inbound provider webhooks (real-
+    # time lifecycle sync) are authenticated by an HMAC-SHA256 signature when a secret is
+    # configured (open in dev when unset).
+    notifications_enabled: bool = _env_bool("NOTIFICATIONS_ENABLED", True)
+    slack_webhook_url: str = os.environ.get("SLACK_WEBHOOK_URL", "")
+    notify_webhook_url: str = os.environ.get("NOTIFY_WEBHOOK_URL", "")
+    webhook_secret: str = os.environ.get("WEBHOOK_SECRET", "")
+    webhook_timeout_s: float = _env_float("WEBHOOK_TIMEOUT_S", 5.0)
+
     @property
     def api_keys(self) -> dict[str, str]:
         """Parse ``API_KEYS`` into a ``{api_key: tenant_id}`` mapping."""

@@ -26,6 +26,7 @@ from typing import Any
 
 from .config import Settings
 from .gateway import Gateway, build_gateway
+from .notifications import NotificationCenter, build_notification_center
 from .persistence import build_state, get_checkpointer
 from .providers import get_ticket_provider
 
@@ -54,6 +55,7 @@ class TenantContext:
     provider: Any  # TicketProvider
     gateway: Gateway
     graph_runner: Any  # GraphRunner | None
+    notifications: NotificationCenter
 
     @property
     def approvals(self) -> Any:
@@ -104,6 +106,7 @@ class TenantRegistry:
             provider=get_ticket_provider(scoped),
             gateway=build_gateway(scoped),
             graph_runner=None,
+            notifications=build_notification_center(scoped),
         )
         ctx.graph_runner = _build_graph_runner(scoped, ctx)
         return ctx

@@ -44,6 +44,7 @@ os.environ.setdefault("LOG_JSON", "false")
 # Keep the narrated transcript clean: the in-process tracer logs a line per span at
 # INFO; the demo summarizes spans itself, so silence the tracer's own logging here.
 logging.getLogger("secops.trace").setLevel(logging.WARNING)
+logging.getLogger("secops.notify").setLevel(logging.WARNING)
 
 # Render UTF-8 (em dashes, etc.) cleanly on Windows consoles and when redirected to
 # a Markdown file, instead of the default cp1252 mojibake.

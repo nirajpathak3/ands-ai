@@ -298,9 +298,20 @@ SLA status (on-track / at-risk / breached / resolved) plus a portfolio summary �
 breach/at-risk counts, **SLA compliance**, and **mean time-to-remediate (MTTR)** — surfaced on the
 dashboard with one-click **Resolve**. 13 new tests; 147 total + eval gate green.
 
-**Next — Day 17:** notifications & webhooks — outbound alerts (Slack/email/webhook) on
-escalations, SLA breaches, and approvals, plus inbound provider webhooks for real-time
-lifecycle sync.
+**Day 17 complete — notifications & webhooks:** the platform now closes the loop with the
+people and systems around it (ADR-019). **Outbound** notifications fire on human-actionable
+events — escalation, approval-required, SLA breach, ticket resolved — through pluggable
+channels (`app/notifications.py`): a `log` channel always on (offline default), plus Slack and
+a generic HMAC-signed webhook that activate only when their URL is set. A per-tenant
+`NotificationCenter` dedupes per finding (no spam on re-ingest), keeps a recent-history buffer
+(`GET /notifications`), and turns the passive SLA view into active paging via `POST
+/notifications/sweep`. **Inbound**, `POST /webhooks/tickets` accepts generic / Jira /
+ServiceNow payloads for real-time lifecycle sync (a developer closing the ticket flows straight
+back to a resolved finding), verified by an HMAC-SHA256 `X-Signature` when `WEBHOOK_SECRET` is
+set. 16 new tests; 163 total + eval gate green.
+
+**Next — Day 18:** scheduled jobs & background workers — a lightweight scheduler for periodic
+SLA sweeps, provider polling/reconciliation, and dead-letter retries (no external broker).
 
 ## Documentation
 

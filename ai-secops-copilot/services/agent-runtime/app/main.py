@@ -29,6 +29,12 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * GET  /observability/alerts           - firing alerts (governance/cost/reliability)
   * GET  /observability/timeseries       - cost/latency over time (charts)
   * GET  /observability/traces           - recent spans from the in-process tracer
+  * GET  /remediation                    - SLA view: per-ticket status + MTTR (Day 16)
+  * POST /tickets/{finding_hash}/transition - apply a ticket lifecycle status (Day 16)
+  * POST /remediation/sync               - reconcile findings with resolved tickets
+  * GET  /notifications                  - recent outbound notifications + channels (Day 17)
+  * POST /notifications/sweep            - detect SLA breaches and fire notifications
+  * POST /webhooks/tickets               - inbound provider webhook (real-time sync)
 
 Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
     python -m uvicorn app.main:app --reload --port 8088
@@ -52,6 +58,7 @@ from .domain import Action
 from .governance import evaluate as governance_evaluate
 from .ingestion import normalize
 from .metrics import compute_metrics, project_findings
+from .notifications import parse_ticket_webhook, verify_signature
 from .observability import (
     configure_logging,
     default_rules,
@@ -236,6 +243,7 @@ def analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
         out["decision"], out["action"]["outcome"], actor="system", latency_ms=latency_ms
     )
     _observe_decision(out["decision"], out["action"]["outcome"], latency_ms)
+    _notify_outcome(ctx, out["decision"], out["action"]["outcome"])
     return out
 
 
@@ -269,6 +277,7 @@ def _run_ingest(report: dict, fmt: str, ctx: TenantContext) -> dict:
         outcome = out["action"]["outcome"]
         ctx.audit.record(out["decision"], outcome, actor="system", latency_ms=latency_ms)
         _observe_decision(out["decision"], outcome, latency_ms)
+        _notify_outcome(ctx, out["decision"], outcome)
         summary[outcome] = summary.get(outcome, 0) + 1
         results.append({
             "findingId": out["decision"].get("findingId"),
@@ -378,6 +387,33 @@ def metrics(ctx: CtxDep) -> dict:
         escalations=len(ctx.escalations.list_all()),
         dead_letters=len(ctx.dead_letter.list_all()),
     )
+
+
+def _notify_outcome(ctx: TenantContext, decision: dict, outcome: str) -> None:
+    """Emit an outbound notification for human-actionable outcomes (Day 17).
+
+    Escalations and approval-required outcomes page a human; deduped per finding so
+    re-ingesting the same report never spams the channels.
+    """
+    finding_hash = str(decision.get("findingHash") or "") or None
+    finding_id = decision.get("findingId")
+    analysis = decision.get("analysis") or {}
+    severity = str(analysis.get("severity", "unknown"))
+    label = finding_id or (finding_hash or "")[:8]
+    if outcome == "escalated":
+        ctx.notifications.emit(
+            "escalation",
+            title=f"Finding escalated ({severity})",
+            message=f"{label}: routed to a human analyst (ambiguous / low confidence).",
+            finding_hash=finding_hash, finding_id=finding_id,
+        )
+    elif outcome == "pending_approval":
+        ctx.notifications.emit(
+            "approval_required",
+            title=f"Approval required ({severity})",
+            message=f"{label}: awaiting human approval before action.",
+            finding_hash=finding_hash, finding_id=finding_id,
+        )
 
 
 def _observe_decision(decision: dict, outcome: str, latency_ms: float) -> None:
@@ -513,6 +549,7 @@ def graph_analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
     outcome = out["action"]["outcome"] if out["status"] == "completed" else "pending_approval"
     ctx.audit.record(decision, outcome, actor="system", latency_ms=latency_ms)
     _observe_decision(decision, outcome, latency_ms)
+    _notify_outcome(ctx, decision, outcome)
     return out
 
 
@@ -609,6 +646,13 @@ def _record_resolution(ctx: TenantContext, finding_hash: str) -> bool:
         },
     }
     ctx.audit.record(decision, "ticket_resolved", actor="provider")
+    label = latest.findingId or finding_hash[:8]
+    ctx.notifications.emit(
+        "ticket_resolved",
+        title=f"Finding resolved ({latest.severity})",
+        message=f"{label}: ticket closed; remediation complete.",
+        finding_hash=finding_hash, finding_id=latest.findingId,
+    )
     return True
 
 
@@ -664,3 +708,94 @@ def remediation_sync(ctx: CtxDep) -> dict:
         if t.status in RESOLVED_STATUSES and _record_resolution(ctx, t.findingHash):
             reconciled += 1
     return {"reconciled": reconciled}
+
+
+# --- Day 17: notifications & webhooks ---------------------------------------
+
+@app.get("/notifications")
+def list_notifications(ctx: CtxDep, limit: int = 50) -> dict:
+    """Recent outbound notifications (newest first) + the active channels."""
+    items = ctx.notifications.list_recent(limit)
+    return {
+        "count": len(items),
+        "channels": ctx.notifications.channels,
+        "notifications": [n.to_dict() for n in items],
+    }
+
+
+@app.post("/notifications/sweep")
+def notifications_sweep(ctx: CtxDep) -> dict:
+    """Detect SLA breaches now and fire a (deduped) ``sla_breach`` notification each.
+
+    Designed to be called on a schedule (or on dashboard refresh): turns the passive SLA
+    view into active paging without a background worker.
+    """
+    findings = project_findings(ctx.audit.list_all())
+    by_hash = {f["findingHash"]: f for f in findings}
+    tickets = [t.to_dict() for t in ctx.provider.all()]
+    view = build_remediation(by_hash, tickets)
+    breaches = [i for i in view["items"] if i["slaStatus"] == "breached"]
+    notified = 0
+    for item in breaches:
+        label = item.get("findingId") or (item.get("findingHash") or "")[:8]
+        fired = ctx.notifications.emit(
+            "sla_breach",
+            title=f"SLA breached ({item['severity']})",
+            message=f"{label}: ticket {item.get('ticketKey')} is past its "
+                    f"{item.get('slaHours')}h SLA.",
+            finding_hash=item.get("findingHash"), finding_id=item.get("findingId"),
+        )
+        if fired is not None:
+            notified += 1
+    return {"breaches": len(breaches), "notified": notified}
+
+
+class WebhookResponse(BaseModel):
+    ok: bool
+    tenant: str
+    findingHash: str
+    status: str
+    resolved: bool
+
+
+@app.post("/webhooks/tickets")
+async def ticket_webhook(request: Request, settings: _SettingsDep) -> WebhookResponse:
+    """Inbound provider webhook for real-time ticket lifecycle sync (Day 17).
+
+    Accepts generic / Jira / ServiceNow payloads, maps them to a finding + lifecycle
+    status, and applies the transition (marking the finding resolved on closure). This
+    endpoint is **not** behind the API-key/JWT data-plane auth — external systems sign
+    the body instead: when ``WEBHOOK_SECRET`` is set, a valid ``X-Signature`` HMAC-SHA256
+    header is required.
+    """
+    raw = await request.body()
+    signature = request.headers.get("X-Signature") or request.headers.get(
+        "X-Hub-Signature-256"
+    )
+    if not verify_signature(settings.webhook_secret, raw, signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        payload = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from None
+
+    finding_hash, status, tenant = parse_ticket_webhook(payload)
+    tenant = tenant or request.headers.get("X-Tenant-Id") or settings.default_tenant
+    if not finding_hash or not status:
+        raise HTTPException(
+            status_code=400, detail="Webhook missing a finding hash or recognizable status"
+        )
+    if status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Unsupported status '{status}'")
+
+    ctx = _registry.get(tenant)
+    ticket = ctx.provider.transition(finding_hash, status)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"No ticket for finding {finding_hash}")
+    resolved = status in RESOLVED_STATUSES
+    if resolved:
+        _record_resolution(ctx, finding_hash)
+    return WebhookResponse(
+        ok=True, tenant=tenant, findingHash=finding_hash,
+        status=status, resolved=resolved,
+    )

@@ -129,6 +129,9 @@
 
       <h2 style="margin-top:22px">Pending approvals (HITL)</h2>
       <div id="approvals"><div class="empty">Nothing waiting.</div></div>
+
+      <h2 style="margin-top:22px">Notifications <span class="pill" id="notifChannels"></span></h2>
+      <div id="notifications"><div class="empty">No notifications yet.</div></div>
     </section>
   </div>
 
@@ -302,6 +305,18 @@ async function resolveTicket(hash) {
   } catch (e) { toast("Error: " + e.message); }
 }
 
+function renderNotifications(data) {
+  $("#notifChannels").textContent = "via " + ((data.channels || []).join(", ") || "—");
+  const items = (data.notifications || []).slice(0, 8);
+  if (!items.length) { $("#notifications").innerHTML = `<div class="empty">No notifications yet.</div>`; return; }
+  const sev = (s) => (s === "critical" ? "critical" : (s === "warning" ? "warning" : "info"));
+  $("#notifications").innerHTML = items.map((n) =>
+    `<div class="alert ${sev(n.severity)}" style="margin-bottom:8px">
+      <span class="tag">${n.event.replace("_", " ")}</span>
+      <span>${n.message}</span>
+    </div>`).join("");
+}
+
 function renderGateway(g) {
   const providers = (g.providers || []).join(", ") || "—";
   $("#gateway").innerHTML = [
@@ -331,14 +346,15 @@ function renderSpark(recent) {
 
 async function refresh() {
   try {
-    const [m, findings, approvals, health, gw, al, ts, rem] = await Promise.all([
+    await api("/notifications/sweep", { method: "POST" }).catch(() => ({}));
+    const [m, findings, approvals, health, gw, al, ts, rem, notif] = await Promise.all([
       api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
       api("/gateway/metrics"), api("/observability/alerts"), api("/observability/timeseries"),
-      api("/remediation"),
+      api("/remediation"), api("/notifications"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
     renderGateway(gw); renderAlerts(al.alerts); renderSpark(ts.recentLlm);
-    renderRemediation(rem);
+    renderRemediation(rem); renderNotifications(notif);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
       `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;

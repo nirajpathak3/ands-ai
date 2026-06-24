@@ -31,10 +31,11 @@ python scripts/demo_walkthrough.py        # (or: make demo)
 
 See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
 
-## Status (Day 16 — ticket lifecycle sync & remediation tracking)
+## Status (Day 17 — notifications & webhooks)
 
 | Piece | State |
 | --- | --- |
+| **Notifications & webhooks** (`app/notifications.py`: log/Slack/webhook channels, HMAC inbound sync) | ✅ implemented + tested |
 | **Remediation & SLA** (`app/remediation.py`: SLA timers, MTTR, remediation view + sync) | ✅ implemented + tested |
 | **Multi-tenancy** (`app/tenancy.py`: per-tenant state/provider/gateway/graph; SQLite per-tenant file) | ✅ implemented + tested |
 | **API auth** (`app/auth.py`: API key + stdlib HS256 JWT, tenant resolution) | ✅ implemented + tested |
@@ -244,6 +245,25 @@ curl -X POST localhost:8088/remediation/sync
 age, time-to-due, and MTTR for resolved items, plus a summary (open vs resolved, breach/at-risk
 counts, SLA compliance, mean MTTR). The dashboard renders this with a one-click **Resolve**.
 
+### Notifications & webhooks (Day 17)
+
+Human-actionable events (escalation, approval-required, SLA breach, ticket resolved) are
+dispatched to channels. The `log` channel is always on; set `SLACK_WEBHOOK_URL` and/or
+`NOTIFY_WEBHOOK_URL` to fan out. Inbound provider webhooks drive real-time lifecycle sync:
+
+```bash
+curl localhost:8088/notifications            # recent notifications + active channels
+curl -X POST localhost:8088/notifications/sweep   # detect SLA breaches and page now
+
+# Inbound provider webhook (generic / Jira / ServiceNow shapes) — real-time sync.
+# When WEBHOOK_SECRET is set, sign the body: X-Signature: sha256=<hmac>.
+curl -X POST localhost:8088/webhooks/tickets -H "content-type: application/json" \
+  -d '{"findingHash": "<hash>", "status": "resolved", "tenant": "public"}'
+
+# Jira-shaped payload also works:
+#   {"issue": {"fields": {"labels": ["finding-<hash>"], "status": {"name": "Done"}}}}
+```
+
 ### Run in Docker (Day 13)
 
 The image is multi-stage and non-root, with a `/health` healthcheck. Build it from the **repo
@@ -288,6 +308,7 @@ app/
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
 ├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter/audit
 ├─ remediation.py   # SLA policy + ticket lifecycle + remediation view/MTTR (Day 16, ADR-018)
+├─ notifications.py # outbound channels (log/Slack/webhook) + inbound webhook parsing (Day 17)
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail

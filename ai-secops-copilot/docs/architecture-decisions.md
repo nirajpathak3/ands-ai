@@ -192,6 +192,31 @@ restart keeps the *resolution* (it's in the persisted audit trail) but not inter
 status; persisting ticket state and a real Jira transition-id mapping are the production
 follow-ups (the `transition` seam is already provider-agnostic).
 
+### ADR-019 — Notifications & webhooks (outbound alerts + inbound lifecycle sync)
+**Decision:** Close the loop with the humans and systems around the platform. **Outbound**
+notifications fire on human-actionable events — `escalation`, `approval_required`,
+`sla_breach`, `ticket_resolved` — through pluggable channels (`app/notifications.py`): a
+`log` channel always on (offline default), plus `slack` and a generic signed `webhook`
+channel that activate only when their URL is configured. A per-tenant `NotificationCenter`
+fans out, dedupes per `(event, finding_hash)` (so re-ingesting never spams), and keeps a
+recent-history buffer (`GET /notifications`); delivery is best-effort and recorded per
+notification so a channel outage never breaks the request. SLA-breach paging is turned from a
+passive view into active alerts by `POST /notifications/sweep` (callable on a schedule or on
+dashboard refresh) rather than a background worker. **Inbound**, `POST /webhooks/tickets`
+accepts generic / Jira / ServiceNow payloads for *real-time* lifecycle sync (a developer
+closing the ticket flows straight back to a `ticket_resolved` finding state); it sits outside
+the API-key/JWT data-plane auth and is instead verified by an HMAC-SHA256 `X-Signature` when
+`WEBHOOK_SECRET` is set.
+**Why:** A security copilot is only useful if the right human hears about the few things that
+need them, and if the platform's state stays true to the system of record in real time. Event
+dedupe + best-effort delivery keep it from becoming noisy or fragile; HMAC (not the data-plane
+auth) is the right trust model for third-party webhook callers. Reusing stdlib `hmac` and the
+already-present `httpx` keeps the dependency surface flat.
+**Tradeoff:** Channels are fire-and-forth with no durable retry/queue (a real deployment would
+back them with a broker + DLQ, reusing the Day-9 dead-letter pattern); the sweep is pull-based
+rather than a scheduler; and the notification buffer is in-memory (transient operator signal,
+not a compliance record — the audit trail remains the durable source of truth).
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,
