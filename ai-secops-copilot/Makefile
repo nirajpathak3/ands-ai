@@ -5,7 +5,7 @@
 
 RUNTIME := services/agent-runtime
 
-.PHONY: help install lint test eval-tests gate check \
+.PHONY: help install lint test eval-tests gate check demo \
         docker-runtime docker-gateway docker up down clean
 
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "eval-tests     - evaluation harness self-tests"
 	@echo "gate           - evaluation regression gate (runtime + RAG + judge + governance)"
 	@echo "check          - lint + test + eval-tests + gate (full local gate, == CI)"
+	@echo "demo           - run the offline end-to-end walkthrough (no server/keys)"
 	@echo "docker         - build both container images"
 	@echo "up / down      - docker compose up --build / down"
 
@@ -34,6 +35,9 @@ gate:
 	python evals/run_eval.py --predictor runtime --all --gate --no-write
 
 check: lint test eval-tests gate
+
+demo:
+	python scripts/demo_walkthrough.py
 
 docker-runtime:
 	docker build -f $(RUNTIME)/Dockerfile -t secops-agent-runtime .

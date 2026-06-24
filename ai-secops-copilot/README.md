@@ -26,6 +26,9 @@ Full diagram: [docs/diagrams/architecture.md](docs/diagrams/architecture.md).
 Everything below runs from the repo root.
 
 ```bash
+# 0) End-to-end demo — one command, fully offline (no server, no keys, no network)
+python scripts/demo_walkthrough.py      # narrates the whole lifecycle (see docs/demo/walkthrough.md)
+
 # 1) Evaluation harness — runs TODAY with a bare Python install (no deps, no keys)
 python evals/run_eval.py                # heuristic baseline over the 50-finding golden set
 python evals/run_eval.py --gate         # add the CI regression gate
@@ -257,12 +260,25 @@ dependency caching, and a `Makefile` mirroring CI (`make check`). The runtime im
 repo layout so containerization needed **zero app code changes**; verified locally that the gateway
 builds and its 5 jest tests pass, the compose/CI YAML is valid, and the Python gate stays green.
 
-**Next — Day 14:** end-to-end demo polish & docs — a scripted walkthrough, a one-command seeded
-demo, architecture diagram refresh, and a recorded run for reviewers.
+**Day 14 complete — end-to-end demo polish & docs:** a single, reproducible
+[`scripts/demo_walkthrough.py`](scripts/demo_walkthrough.py) now narrates the entire lifecycle
+**offline, with no server, no API keys, and no network** — it drives the runtime in-process
+(FastAPI `TestClient`) over the bundled Semgrep + SARIF reports and prints each stage: health →
+reset+seed → current-state findings (SQLi auto-tickets, a medium waits, FPs suppressed, an
+ambiguous critical escalates) → a human **approves** the pending finding → **idempotency** (re-seed:
+events grow, findings/tickets don't) → KPIs → gateway cache/cost (50% hit @ $0) → zero firing
+alerts → the audit trail. It exits non-zero on any failure, so it doubles as an end-to-end smoke
+test (`make demo`). The recorded run lives in [`docs/demo/walkthrough.md`](docs/demo/walkthrough.md),
+and the architecture diagrams gained an **as-built (Day 14)** topology that reconciles the target
+vision with what actually runs today ([docs/diagrams/architecture.md](docs/diagrams/architecture.md) §9).
+
+**Next — Day 15:** multi-tenant isolation & API auth — per-tenant state/credentials, API-key/JWT
+auth on the runtime endpoints, and rate limiting.
 
 ## Documentation
 
 - [Product Vision](docs/PRODUCT_VISION.md)
+- [Demo Walkthrough](docs/demo/walkthrough.md) — one-command offline run, narrated
 - [Architecture Decisions](docs/architecture-decisions.md)
 - [Architecture Diagrams](docs/diagrams/architecture.md)
 - [Build Plan & Notes](docs/planning/AI_PLATFORM_ENGINEER_PREP.md)

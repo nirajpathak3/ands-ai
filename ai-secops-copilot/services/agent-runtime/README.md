@@ -15,15 +15,27 @@ scanner report (Semgrep/SARIF) -> ingest/normalize -> idempotency hash
 - **Ticket Decision Node + Governance Gate** — maps confidence → disposition (auto-execute / human-approval / escalate). **Implemented.**
 - **Ticketing + HITL** — provider-agnostic ticketing (ADR-008) with idempotent adapters (ADR-009): in-memory **mock** (default), **real Jira** (Cloud REST v3, idempotent via a `finding-<hash>` label search), and a **ServiceNow mock**. Human-approval queue, escalation queue, and a **dead-letter queue** for provider failures. **Implemented.**
 
-> **The LLM is a deterministic offline stand-in today** (`app/analysis.py` via
+> **The LLM defaults to a deterministic offline stand-in** (`app/analysis.py` via
 > `DeterministicLLM`), so the whole pipeline runs with no API keys and is fully
-> reproducible in CI. On Day 11 the AI Gateway swaps a real model in behind the
-> same `LLMClient` seam — nothing downstream changes.
+> reproducible in CI. Since Day 11 every model call flows through the AI Gateway
+> (`app/gateway/`): set `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` to use a real model
+> behind the same `LLMClient` seam, with deterministic as the final fallback —
+> nothing downstream changes.
 
-## Status (Day 13 — containerization & CI/CD)
+## Demo (offline, one command)
+
+```bash
+# from the repo root — narrates the whole lifecycle with no server, keys, or network:
+python scripts/demo_walkthrough.py        # (or: make demo)
+```
+
+See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
+
+## Status (Day 14 — end-to-end demo polish & docs)
 
 | Piece | State |
 | --- | --- |
+| **Demo walkthrough** (`scripts/demo_walkthrough.py`: offline end-to-end, doubles as smoke test) | ✅ implemented |
 | **Container image** (multi-stage, non-root, healthcheck) + **compose** stack | ✅ builds in CI |
 | **CI/CD** (py 3.11/3.12 matrix, Node gateway job, image build + GHCR publish) | ✅ implemented |
 | Observability (in-process tracing + structured logs, Prometheus exposition, alert engine) | ✅ implemented + tested |

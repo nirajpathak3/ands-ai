@@ -1,5 +1,12 @@
 # Architecture Diagrams — AI Security Operations Copilot
 
+> **Target vs as-built.** Sections 1–8 show the **target** architecture (the full product
+> vision: NestJS egress, Langfuse, managed providers). Section 9 shows the **as-built runtime
+> as of Day 14** — what actually runs today: an in-process Python AI Gateway, an in-process
+> observability stack (tracer + Prometheus exposition + alert engine, optional OpenTelemetry),
+> pluggable persistence (memory → SQLite → Postgres), and a deterministic offline fallback so
+> the whole system runs with no keys. Where the two differ, the as-built diagram is authoritative.
+
 ---
 
 ## 1. Full System Architecture
@@ -304,3 +311,88 @@ flowchart LR
     CORE --> EVALC
     CORE --> MCPC
 ```
+
+---
+
+## 9. As-Built Runtime (Day 14)
+
+What actually runs today. Everything in the `agent-runtime` box is **in-process Python**, so the
+whole platform runs offline with no keys (the deterministic provider is the always-on fallback).
+The NestJS gateway is the equivalent standalone control-plane (same `llm.types.ts`/`cost.ts`
+contract); real providers, OTel export, and Postgres/Redis light up by configuration only.
+
+```mermaid
+flowchart TB
+    subgraph ingest [Ingestion]
+        RPT[Semgrep / SARIF report]
+        NORM[normalize → Finding contract\nADR-007]
+    end
+
+    subgraph rt [agent-runtime — Python / FastAPI, in-process]
+        direction TB
+        subgraph graph [LangGraph — compiled StateGraph]
+            FA[finding_analysis\nstructured output + reprompt]
+            TD[ticket_decision]
+            GG{Governance Gate\nasymmetric thresholds}
+            AW[await_approval\nHITL interrupt + resume]
+        end
+        RAG[RAG retriever\nlexical TF-IDF · pgvector seam]
+        GWAY[AI Gateway\nroute · semantic cache · fallback · cost]
+        TKT[Ticketing orchestrator\nidempotent by finding_hash]
+        OBS[Observability\ntracer · time-series · alert engine]
+    end
+
+    subgraph providers [LLM providers — ordered fallback]
+        OAI[OpenAI]
+        CLA[Claude]
+        DET[Deterministic\nalways-on, offline, $0]
+    end
+
+    subgraph tools [Ticket providers]
+        MOCK[Mock - default]
+        JIRA[Jira Cloud - real]
+        SNOW[ServiceNow - mock]
+        DLQ[(Dead-letter queue)]
+    end
+
+    subgraph state [Persistence seam — DATABASE_URL]
+        MEM[(in-memory\ndefault)]
+        SQL[(SQLite\nlocal/CI)]
+        PGS[(Postgres\nprod)]
+    end
+
+    subgraph egress [Observability egress - optional]
+        OTLP[OpenTelemetry OTLP\nOTEL_ENABLED=true]
+        PROM[Prometheus scrape\n/observability/metrics]
+        DASH[Dashboard + /health]
+    end
+
+    RPT --> NORM --> FA
+    FA --> RAG
+    RAG --> FA
+    FA --> GWAY
+    GWAY --> OAI --> CLA --> DET
+    FA --> TD --> GG
+    GG -->|auto-execute / escalate| TKT
+    GG -->|approval band| AW
+    AW -->|approved| TKT
+    TKT --> MOCK & JIRA & SNOW
+    TKT -.->|provider failure| DLQ
+    GG --> OBS
+    GWAY --> OBS
+    rt --- state
+    OBS --> OTLP & PROM & DASH
+```
+
+### Drift from the target diagrams (1–8)
+
+| Concern | Target (1–8) | As-built (Day 14) |
+| --- | --- | --- |
+| LLM egress | NestJS gateway service | **In-process Python gateway**; NestJS is the standalone control-plane scaffold |
+| Providers | OpenAI primary, Claude fallback | OpenAI → Claude → **deterministic** (offline, always-on final fallback) |
+| Semantic cache | Redis (cosine) | **Lexical Jaccard** in-process offline; Redis/cosine is the prod upgrade behind the same seam |
+| LLM tracing | Langfuse | **In-process tracer** + structured JSON logs; **OpenTelemetry OTLP** is the opt-in export (Langfuse not built) |
+| Metrics | Langfuse dashboards | **Prometheus** text exposition + rolling time-series + **alert rule engine** |
+| Vector store | pgvector (required) | **Lexical retriever** default; pgvector behind the `KnowledgeRetriever` seam |
+| State | Postgres | **memory → SQLite → Postgres** via `DATABASE_URL` (identical SQL schema) |
+| Run | — | `python scripts/demo_walkthrough.py` (offline) · `docker compose up` (full stack) |
