@@ -19,6 +19,8 @@ The flow it narrates (the canonical reviewer story):
   7. AI Gateway    — cache-hit rate + cost (deterministic provider -> $0, offline)
   8. observability — firing alerts (zero offline) over governance/cost/reliability
   9. audit trail   — the append-only "why" behind the last few decisions
+ 10. policy        — a suppression rule deterministically overrides governance (audited)
+ 11. analytics     — trend roll-up + a Markdown executive report from the audit trail
 
 It exits non-zero if any step fails, so it doubles as a smoke test.
 """
@@ -95,6 +97,11 @@ def main() -> int:
 
     def post(path: str) -> dict:
         res = client.post(path)
+        res.raise_for_status()
+        return res.json()
+
+    def post_json(path: str, body: dict, headers: dict | None = None) -> dict:
+        res = client.post(path, json=body, headers=headers or {})
         res.raise_for_status()
         return res.json()
 
@@ -226,6 +233,54 @@ def main() -> int:
             f"  {rec['findingId']:<20}{rec['disposition']:<16}"
             f"{rec['reasonCode']:<32}{rec['actor']}"
         )
+
+    # 10) Policy-as-code ----------------------------------------------------
+    section("10. POLICY-AS-CODE — deterministic override on top of governance")
+    pol = {"X-Tenant-Id": "policy-demo"}
+    post_json("/demo/reset", {}, pol)
+    sqli = {
+        "id": "F-DEMO-SQLI", "ruleId": "formatted-sql-query", "title": "SQL injection",
+        "message": "user input flows into a SQL query", "file": "app/api/users.py",
+        "startLine": 42, "cwe": "CWE-89", "scannerSeverity": "ERROR",
+        "codeSnippet": "q = '...' + request.args['name']; cursor.execute(q)",
+    }
+    before = post_json("/analyze", {"finding": sqli}, pol)["decision"]
+    say(
+        f"  without policy : {before['disposition']} / "
+        f"{before['analysis']['recommendedAction']}  ({before['reasonCode']})"
+    )
+    rule = {"id": "fp-sql-pattern", "action": "suppress",
+            "ruleIds": ["formatted-sql-query"], "reason": "known false-positive pattern"}
+    post_json("/policy/rules", {"rules": [rule]}, pol)
+    after = post_json("/analyze", {"finding": sqli}, pol)
+    dec = after["decision"]
+    say(
+        "  rule applied   : suppress where ruleId=formatted-sql-query",
+        f"  with policy    : {dec['disposition']} / "
+        f"{dec['analysis']['recommendedAction']}  ({dec['reasonCode']}) "
+        f"-> action={after['action']['outcome']}",
+    )
+    hits = client.get("/policy", headers=pol).json()["hits"]
+    say(f"  policy hits    : {hits}  (audited as reasonCode=policy:<id>)")
+
+    # 11) Trend analytics ---------------------------------------------------
+    section("11. ANALYTICS — trend roll-up + Markdown executive report")
+    summ = get("/analytics/summary")
+    rates = summ["rates"]
+    rem = summ.get("remediation", {})
+    say(
+        f"  decisions          : {summ['decisions']}",
+        f"  automation rate    : {rates['automation'] * 100:.0f}%  "
+        f"(suppression {rates['suppression'] * 100:.0f}%)",
+        f"  suppressions       : {summ['suppressions']} "
+        f"({summ['policySuppressions']} by policy)",
+        f"  resolved / MTTR    : {summ['resolved']} / {rem.get('mttrHoursMean', 0)}h",
+        f"  SLA compliance     : {rem.get('slaCompliance', 1.0) * 100:.0f}%",
+    )
+    report = client.get("/analytics/report").text.splitlines()
+    say("", "  --- GET /analytics/report (Markdown, first lines) ---")
+    for line in report[:10]:
+        say(f"  {line}")
 
     section("DEMO COMPLETE")
     say(

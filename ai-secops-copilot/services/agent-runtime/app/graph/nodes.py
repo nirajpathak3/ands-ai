@@ -96,11 +96,14 @@ def finding_analysis_node(state: GraphState, config=None) -> GraphState:  # noqa
     return state
 
 
-def ticket_decision_node(state: GraphState) -> GraphState:
+def ticket_decision_node(state: GraphState, config=None) -> GraphState:  # noqa: ANN001
+    # `config` is intentionally untyped (see finding_analysis_node) so LangGraph injects it.
     """Apply the Governance Gate to the analysis to produce a TicketDecision.
 
     This node is functional: given a validated analysis it produces a governed
-    decision. (Auto-execute / human-approval / escalate.)
+    decision (auto-execute / human-approval / escalate). A per-tenant policy engine
+    (Day 19), injected via state/config, may then apply a deterministic override
+    (suppress / force-escalate / force-ticket) — audited as ``reasonCode=policy:<id>``.
     """
     settings = get_settings()
     analysis = state.get("analysis")
@@ -126,4 +129,8 @@ def ticket_decision_node(state: GraphState) -> GraphState:
         "reasonCode": decision.reason_code.value,
         "citations": state.get("citations", []),
     }
+
+    policy = _from_state_or_config(state, config, "policy")
+    if policy is not None:
+        policy.apply(state.get("finding", {}), state["decision"])
     return state

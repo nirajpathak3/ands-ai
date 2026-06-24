@@ -50,6 +50,7 @@ def run_pipeline(
     dead_letter: DeadLetterQueue | None = None,
     client: LLMClient | None = None,
     retriever: KnowledgeRetriever | None = None,
+    policy: object | None = None,
 ) -> dict:
     """Process one finding end to end and execute the resulting decision.
 
@@ -60,6 +61,8 @@ def run_pipeline(
         state["_client"] = client  # type: ignore[typeddict-unknown-key]
     if retriever is not None:
         state["_retriever"] = retriever  # type: ignore[typeddict-unknown-key]
+    if policy is not None:
+        state["_policy"] = policy  # type: ignore[typeddict-unknown-key]
 
     tracer = _get_tracer()
     with _span(tracer, "pipeline.run", findingId=str(finding.get("id", ""))):

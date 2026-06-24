@@ -37,6 +37,12 @@ Day-2 walking skeleton (all runnable offline with the deterministic LLM stand-in
   * POST /webhooks/tickets               - inbound provider webhook (real-time sync)
   * GET  /jobs                           - background-job status (Day 18)
   * POST /jobs/run/{name}                - run a background job once, on demand
+  * GET  /policy                         - active policy rules + hit counts (Day 19)
+  * POST /policy/rules                   - set this tenant's policy rules
+  * POST /policy/evaluate                - dry-run a finding against the rules
+  * GET  /analytics/summary              - trend roll-up + deltas (Day 20)
+  * GET  /analytics/trends               - bucketed time-series
+  * GET  /analytics/report               - Markdown executive report
 
 Run locally (use `python -m` so it works even when the uvicorn script isn't on PATH):
     python -m uvicorn app.main:app --reload --port 8088
@@ -55,6 +61,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from . import __version__
+from .analytics import bucketize, build_report, summarize
 from .auth import AuthError, Principal, authenticate
 from .config import Settings, get_settings
 from .domain import Action
@@ -72,6 +79,7 @@ from .observability import (
     reset_observability,
 )
 from .pipeline import run_pipeline
+from .policy import parse_rules
 from .rag import get_retriever
 from .ratelimit import get_rate_limiter
 from .remediation import RESOLVED_STATUSES, VALID_STATUSES, build_remediation
@@ -257,6 +265,7 @@ def analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
         escalations=ctx.escalations,
         dead_letter=ctx.dead_letter,
         retriever=_retriever,
+        policy=ctx.policy,
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
     ctx.audit.record(
@@ -292,6 +301,7 @@ def _run_ingest(report: dict, fmt: str, ctx: TenantContext) -> dict:
         out = run_pipeline(
             finding.model_dump(), provider=ctx.provider, approvals=ctx.approvals,
             escalations=ctx.escalations, dead_letter=ctx.dead_letter, retriever=_retriever,
+            policy=ctx.policy,
         )
         latency_ms = (time.perf_counter() - started) * 1000.0
         outcome = out["action"]["outcome"]
@@ -562,7 +572,7 @@ def graph_analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
         raise HTTPException(status_code=503, detail="LangGraph is not installed.")
     started = time.perf_counter()
     out = ctx.graph_runner.analyze(
-        req.finding.model_dump(), client=None, retriever=_retriever
+        req.finding.model_dump(), client=None, retriever=_retriever, policy=ctx.policy
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
     decision = out.get("decision") or {}
@@ -829,6 +839,90 @@ async def ticket_webhook(request: Request, settings: _SettingsDep) -> WebhookRes
         ok=True, tenant=tenant, findingHash=finding_hash,
         status=status, resolved=resolved,
     )
+
+
+# --- Day 19: policy-as-code / suppression rules -----------------------------
+
+class PolicyRulesRequest(BaseModel):
+    rules: list[dict]
+
+
+class PolicyEvaluateRequest(BaseModel):
+    finding: Finding
+    severity: str | None = None
+
+
+@app.get("/policy")
+def get_policy(ctx: CtxDep) -> dict:
+    """Active policy rules for this tenant + per-rule hit counts (Day 19)."""
+    return {
+        "count": len(ctx.policy.rules),
+        "rules": [r.to_dict() for r in ctx.policy.rules],
+        "hits": ctx.policy.hits(),
+    }
+
+
+@app.post("/policy/rules")
+def set_policy_rules(req: PolicyRulesRequest, ctx: CtxDep) -> dict:
+    """Replace this tenant's policy rules at runtime (resets hit counts)."""
+    try:
+        rules = parse_rules(req.rules)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid policy rules: {exc}") from None
+    ctx.policy.replace(rules)
+    return {"count": len(rules), "rules": [r.to_dict() for r in rules]}
+
+
+@app.post("/policy/evaluate")
+def evaluate_policy(req: PolicyEvaluateRequest, ctx: CtxDep) -> dict:
+    """Dry-run: would any rule match this finding? (explainability, no side effects)."""
+    finding = req.finding.model_dump()
+    severity = req.severity or str(finding.get("scannerSeverity") or "medium")
+    rule = ctx.policy.match(finding, severity)
+    return {
+        "matched": rule is not None,
+        "severity": severity,
+        "rule": rule.to_dict() if rule is not None else None,
+    }
+
+
+# --- Day 20: metrics history & trend analytics ------------------------------
+
+def _remediation_summary(ctx: TenantContext) -> dict:
+    findings = project_findings(ctx.audit.list_all())
+    by_hash = {f["findingHash"]: f for f in findings}
+    tickets = [t.to_dict() for t in ctx.provider.all()]
+    return build_remediation(by_hash, tickets)["summary"]
+
+
+@app.get("/analytics/summary")
+def analytics_summary(ctx: CtxDep, window_days: float = 30.0, bucket: str = "day") -> dict:
+    """Portfolio roll-up: rates, suppression/policy activity, resolution, MTTR/SLA, deltas."""
+    return summarize(
+        ctx.audit.list_all(), remediation=_remediation_summary(ctx),
+        window_days=window_days, bucket=bucket,
+    )
+
+
+@app.get("/analytics/trends")
+def analytics_trends(ctx: CtxDep, window_days: float = 30.0, bucket: str = "day") -> dict:
+    """Bucketed time-series of decisions, autonomy split, suppression, and throughput."""
+    buckets = bucketize(ctx.audit.list_all(), window_days=window_days, bucket=bucket)
+    return {"windowDays": window_days, "bucket": bucket, "buckets": buckets}
+
+
+@app.get("/analytics/report")
+def analytics_report(
+    ctx: CtxDep, window_days: float = 30.0, bucket: str = "day"
+) -> PlainTextResponse:
+    """Self-contained Markdown executive report (what the platform did this period)."""
+    records = ctx.audit.list_all()
+    summary = summarize(
+        records, remediation=_remediation_summary(ctx),
+        window_days=window_days, bucket=bucket,
+    )
+    trends = bucketize(records, window_days=window_days, bucket=bucket)
+    return PlainTextResponse(build_report(summary, trends))
 
 
 # --- Day 18: scheduled jobs / background workers ----------------------------

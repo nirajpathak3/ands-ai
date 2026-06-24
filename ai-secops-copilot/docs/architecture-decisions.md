@@ -243,6 +243,49 @@ distributed scheduler), and durable per-job run history; the job *functions* are
 broker-agnostic, so only the trigger changes. Job state is in-memory operator telemetry, not a
 compliance record (the audit trail remains the source of truth).
 
+### ADR-021 — Policy-as-code & suppression rules (deterministic overrides on governance)
+**Decision:** Add a declarative, per-tenant rule layer (`app/policy.py`) that overrides the
+confidence-based governance decision *after* it is computed. Rules are data (`PolicyRule`):
+match on severity / ruleId / cwe / path-glob / tenant, first-match-wins, each with a stable id
++ human reason. Actions are `suppress` (auto-dismiss, no ticket), `force_escalate`,
+`force_ticket`, and `annotate`. A per-tenant `PolicyEngine` (hit-counted for observability) is
+injected into `ticket_decision_node` via the same state/config seam used for the LLM client and
+retriever, so **both** the inline pipeline and the compiled LangGraph honor policy identically.
+A matched override rewrites the decision in place and stamps `reasonCode = policy:<id>` plus a
+`policyApplied` marker, so the override is auditable and visible everywhere the decision flows.
+Rules load from inline JSON / a file (offline default: none → no behavior change) and can be set
+per tenant at runtime (`POST /policy/rules`); `POST /policy/evaluate` dry-runs a finding.
+**Why:** Every real security platform needs to "tune down the noise" (and force attention on
+sensitive areas) without code changes. Keeping policy *separate from and after* governance is
+the key design choice: governance stays a clean confidence model, while policy is the
+deterministic, human-authored override — and because it's audited as `policy:<id>`, an analyst
+can always see exactly why a finding was suppressed or escalated. Reusing the existing injection
+seam avoids forking the reasoning between the two orchestration paths.
+**Tradeoff:** First-match-wins (not a full rules engine with priorities/conjunction trees) and
+no UI rule editor; suppression rewrites the recorded `recommendedAction`, which is intentional
+(policy *is* the decision) but means the original model recommendation is recovered from the
+analysis reason, not a separate field. Runtime-set rules are per-process (reset on demo-reset);
+a durable rule store is the production follow-up.
+
+### ADR-022 — Metrics history & trend analytics (reporting)
+**Decision:** Add a reporting layer (`app/analytics.py`) that derives time-series and roll-ups
+from the **append-only audit trail** on read — no new tables. It buckets decision events
+(day/week/hour) into automation/approval/escalation rates, suppression + policy-suppression
+activity, mean latency, and resolution throughput; rolls them into a window summary with
+period-over-period deltas (latest vs previous bucket) and MTTR/SLA pulled from the Day-16
+remediation summary; and renders a self-contained Markdown executive report
+(`GET /analytics/{summary,trends,report}`).
+**Why:** The project's headline claim is "governed automation that reduces toil" — that only
+lands if the impact is **measurable over time**. Deriving everything from the audit trail keeps
+a single source of truth and means trends survive restarts wherever the trail is durable
+(SQLite/Postgres), with zero extra storage or write-path cost. Pure, time-injectable functions
+keep it reproducible and unit-testable.
+**Tradeoff:** Read-time aggregation is O(events) per call (fine at MVP scale; a real deployment
+would pre-aggregate or use a warehouse). "Top noisy rules" is approximated by governance
+reason-codes/severity because the audit record doesn't carry the scanner ruleId (adding it is a
+small future schema change). Demo data is single-timestamp, so trends look flat until the
+platform runs across real days.
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

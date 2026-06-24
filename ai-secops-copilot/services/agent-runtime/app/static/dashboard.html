@@ -146,6 +146,23 @@
   </section>
 
   <section class="card" style="margin-top:14px">
+    <h2>Trends &amp; analytics <span class="pill" id="trendWindow"></span></h2>
+    <div class="grid kpis" id="trendKpis" style="margin-bottom:14px"></div>
+    <div>
+      <div class="label" style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.6px">Decisions per bucket</div>
+      <div class="spark" id="trendSpark"></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h2>Policy-as-code <span class="pill" id="policyState"></span></h2>
+    <table>
+      <thead><tr><th>Rule</th><th>Action</th><th>Match</th><th>Hits</th></tr></thead>
+      <tbody id="policy"><tr><td class="empty" colspan="4">No policy rules set.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card" style="margin-top:14px">
     <h2>Background jobs <span class="pill" id="jobsState"></span></h2>
     <table>
       <thead><tr><th>Job</th><th>Every</th><th>Runs</th><th>Last status</th>
@@ -219,7 +236,7 @@ function renderFindings(findings) {
       <td class="mono">${f.findingId || f.findingHash.slice(0, 8)}</td>
       <td class="sev ${f.severity}">${f.severity}</td>
       <td>${f.recommendedAction}</td>
-      <td><span class="chip ${f.disposition}">${f.disposition.replace("_", " ")}</span></td>
+      <td><span class="chip ${f.disposition}">${f.disposition.replace("_", " ")}</span>${(f.reasonCode || "").startsWith("policy:") ? ` <span class="chip resolved" title="${f.reasonCode}">policy</span>` : ""}</td>
       <td>${(f.confidence * 100).toFixed(0)}%</td>
       <td>${ticket}</td>
       <td class="mono">${f.evaluations}&times;</td>
@@ -326,6 +343,47 @@ function renderNotifications(data) {
     </div>`).join("");
 }
 
+function renderTrends(summary, trends) {
+  $("#trendWindow").textContent = `last ${summary.windowDays}d`;
+  const r = summary.rates || {};
+  const rem = summary.remediation || {};
+  const d = summary.deltas || {};
+  const arrow = (x) => (x > 0 ? " ▲" : (x < 0 ? " ▼" : ""));
+  $("#trendKpis").innerHTML = [
+    kpiCard("Decisions", summary.decisions, `${d.decisions >= 0 ? "+" : ""}${d.decisions} vs prev`),
+    kpiCard("Automation", pct(r.automation || 0), `${(d.automationRate * 100).toFixed(0)}%${arrow(d.automationRate)} vs prev`),
+    kpiCard("Suppressions", summary.suppressions, `${summary.policySuppressions} by policy`),
+    kpiCard("Resolved", summary.resolved, `MTTR ${rem.mttrHoursMean || 0}h`),
+    kpiCard("SLA compliance", pct(rem.slaCompliance ?? 1), `${rem.breached || 0} breached`),
+  ].join("");
+  const vals = (trends.buckets || []).map((b) => b.decisions);
+  const max = Math.max(1, ...vals);
+  $("#trendSpark").innerHTML = vals.length
+    ? trends.buckets.map((b) => `<span style="height:${Math.max(2, b.decisions / max * 38)}px" title="${b.bucket}: ${b.decisions} decisions, auto ${(b.automationRate * 100).toFixed(0)}%"></span>`).join("")
+    : `<span style="opacity:.3"></span>`;
+}
+
+function renderPolicy(data) {
+  const rules = data.rules || [];
+  $("#policyState").textContent = `${data.count || 0} rule${(data.count || 0) === 1 ? "" : "s"}`;
+  if (!rules.length) { $("#policy").innerHTML = `<tr><td class="empty" colspan="4">No policy rules set.</td></tr>`; return; }
+  const hits = data.hits || {};
+  const matchSummary = (r) => {
+    const parts = [];
+    if (r.severity && r.severity.length) parts.push("sev:" + r.severity.join("/"));
+    if (r.ruleIds && r.ruleIds.length) parts.push("rule:" + r.ruleIds.join("/"));
+    if (r.paths && r.paths.length) parts.push("path:" + r.paths.join("/"));
+    return parts.join(" · ") || "any";
+  };
+  $("#policy").innerHTML = rules.map((r) => `
+    <tr>
+      <td class="mono">${r.id}</td>
+      <td><span class="chip ${r.action === "suppress" ? "resolved" : (r.action === "force_escalate" ? "breached" : "on_track")}">${r.action.replace("_", " ")}</span></td>
+      <td class="mono">${matchSummary(r)}</td>
+      <td class="mono">${hits[r.id] || 0}</td>
+    </tr>`).join("");
+}
+
 function renderJobs(data) {
   $("#jobsState").textContent = data.schedulerEnabled
     ? (data.running ? "scheduler running" : "enabled (idle)")
@@ -390,14 +448,16 @@ function renderSpark(recent) {
 async function refresh() {
   try {
     await api("/notifications/sweep", { method: "POST" }).catch(() => ({}));
-    const [m, findings, approvals, health, gw, al, ts, rem, notif, jobs] = await Promise.all([
+    const [m, findings, approvals, health, gw, al, ts, rem, notif, jobs, policy, asum, atr] = await Promise.all([
       api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
       api("/gateway/metrics"), api("/observability/alerts"), api("/observability/timeseries"),
-      api("/remediation"), api("/notifications"), api("/jobs"),
+      api("/remediation"), api("/notifications"), api("/jobs"), api("/policy"),
+      api("/analytics/summary"), api("/analytics/trends"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
     renderGateway(gw); renderAlerts(al.alerts); renderSpark(ts.recentLlm);
-    renderRemediation(rem); renderNotifications(notif); renderJobs(jobs);
+    renderRemediation(rem); renderNotifications(notif); renderJobs(jobs); renderPolicy(policy);
+    renderTrends(asum, atr);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
       `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;

@@ -28,6 +28,7 @@ from .config import Settings
 from .gateway import Gateway, build_gateway
 from .notifications import NotificationCenter, build_notification_center
 from .persistence import build_state, get_checkpointer
+from .policy import PolicyEngine, build_engine
 from .providers import get_ticket_provider
 
 
@@ -56,6 +57,7 @@ class TenantContext:
     gateway: Gateway
     graph_runner: Any  # GraphRunner | None
     notifications: NotificationCenter
+    policy: PolicyEngine
 
     @property
     def approvals(self) -> Any:
@@ -107,6 +109,7 @@ class TenantRegistry:
             gateway=build_gateway(scoped),
             graph_runner=None,
             notifications=build_notification_center(scoped),
+            policy=build_engine(scoped, tenant_id),
         )
         ctx.graph_runner = _build_graph_runner(scoped, ctx)
         return ctx

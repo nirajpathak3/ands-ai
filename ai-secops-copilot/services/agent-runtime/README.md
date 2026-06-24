@@ -31,10 +31,12 @@ python scripts/demo_walkthrough.py        # (or: make demo)
 
 See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
 
-## Status (Day 18 — scheduled jobs & background workers)
+## Status (Day 20 — policy-as-code + trend analytics)
 
 | Piece | State |
 | --- | --- |
+| **Analytics** (`app/analytics.py`: trend buckets, deltas, MTTR/SLA, Markdown report) | ✅ implemented + tested |
+| **Policy-as-code** (`app/policy.py`: declarative suppression/escalation rules, audited overrides) | ✅ implemented + tested |
 | **Scheduler** (`app/scheduler.py`: asyncio jobs — SLA sweep, reconcile, DLQ retry; on-demand + periodic) | ✅ implemented + tested |
 | **Notifications & webhooks** (`app/notifications.py`: log/Slack/webhook channels, HMAC inbound sync) | ✅ implemented + tested |
 | **Remediation & SLA** (`app/remediation.py`: SLA timers, MTTR, remediation view + sync) | ✅ implemented + tested |
@@ -245,6 +247,28 @@ curl -X POST localhost:8088/remediation/sync
 `/remediation` returns each ticket's `slaStatus` (on_track / at_risk / breached / resolved),
 age, time-to-due, and MTTR for resolved items, plus a summary (open vs resolved, breach/at-risk
 counts, SLA compliance, mean MTTR). The dashboard renders this with a one-click **Resolve**.
+
+### Policy-as-code & analytics (Days 19–20)
+
+Policy rules deterministically override governance (audited as `reasonCode=policy:<id>`);
+analytics derives trends + an exec report from the audit trail:
+
+```bash
+# Set this tenant's policy rules (also POLICY_RULES / POLICY_RULES_PATH at boot):
+curl -X POST localhost:8088/policy/rules -H "content-type: application/json" -d '{
+  "rules": [
+    {"id": "suppress-tests", "action": "suppress", "paths": ["tests/**"], "reason": "test code"},
+    {"id": "escalate-auth", "action": "force_escalate", "paths": ["**/auth/**"]}
+  ]}'
+curl localhost:8088/policy                         # rules + per-rule hit counts
+curl -X POST localhost:8088/policy/evaluate -H "content-type: application/json" \
+  -d '{"finding": {...}, "severity": "high"}'      # dry-run (no side effects)
+
+# Trend analytics + report (derived from the audit trail):
+curl "localhost:8088/analytics/summary?window_days=30&bucket=day"
+curl "localhost:8088/analytics/trends?bucket=day"
+curl localhost:8088/analytics/report               # Markdown executive report
+```
 
 ### Background jobs (Day 18)
 

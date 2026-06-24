@@ -322,9 +322,26 @@ a timer; the periodic loops start from the FastAPI lifespan only when `SCHEDULER
 across all active tenants and reuse the Day 16/17 helpers. 11 new tests; 174 total + eval gate
 green.
 
-**Next — Day 19:** policy-as-code & suppression rules — a declarative rule layer (per
-tenant/severity/rule-id) to auto-suppress, force-escalate, or override governance, evaluated in
-the pipeline with a full audit trail.
+**Day 19 complete — policy-as-code & suppression rules:** a declarative, per-tenant rule layer
+(`app/policy.py`, ADR-021) now overrides the governance decision *after* it's computed. Rules
+are data — match on severity / ruleId / cwe / path-glob / tenant (first-match-wins) — with
+actions `suppress`, `force_escalate`, `force_ticket`, `annotate`. The hit-counted `PolicyEngine`
+is injected into the decision node via the same seam as the LLM client, so the inline pipeline
+**and** the compiled LangGraph honor policy identically; an override stamps `reasonCode=policy:<id>`
+so it's fully audited. Rules load from JSON/file (offline default: none) or are set per tenant at
+runtime (`POST /policy/rules`); `POST /policy/evaluate` dry-runs a finding.
+
+**Day 20 complete — metrics history & trend analytics:** a reporting layer (`app/analytics.py`,
+ADR-022) derives time-series + roll-ups from the append-only audit trail **on read** (no new
+tables, survives restarts on durable backends). `GET /analytics/summary` gives window rates,
+suppression/policy activity, resolution + MTTR/SLA, and period-over-period deltas;
+`/analytics/trends` is the bucketed series (day/week/hour); `/analytics/report` renders a
+self-contained Markdown exec report. The dashboard gains Policy and Trends panels. 24 new tests;
+**198 total** + eval gate green.
+
+**Status:** the original **15-day plan is complete**; Days 16–20 are enhancement days that take
+the platform from portfolio-ready toward production-shaped (lifecycle/SLA, notifications,
+background workers, policy-as-code, analytics).
 
 ## Documentation
 

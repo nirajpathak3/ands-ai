@@ -146,6 +146,12 @@ class Settings:
     reconcile_interval_s: float = _env_float("RECONCILE_INTERVAL_S", 120.0)
     deadletter_retry_interval_s: float = _env_float("DEADLETTER_RETRY_INTERVAL_S", 120.0)
 
+    # Policy-as-code / suppression rules (Day 19, ADR-021). Offline default: no rules
+    # (no behavior change). Provide rules inline as a JSON list, or via a file path; rules
+    # can also be set per-tenant at runtime through POST /policy/rules.
+    policy_rules_inline: str = os.environ.get("POLICY_RULES", "")
+    policy_rules_path: str = os.environ.get("POLICY_RULES_PATH", "")
+
     @property
     def api_keys(self) -> dict[str, str]:
         """Parse ``API_KEYS`` into a ``{api_key: tenant_id}`` mapping."""

@@ -43,14 +43,16 @@ class GraphRunner:
         *,
         client: LLMClient | None = None,
         retriever: KnowledgeRetriever | None = None,
+        policy: object | None = None,
     ) -> dict:
-        # client/retriever go in config (runtime) so they are NOT checkpointed —
-        # LangGraph's serializer cannot persist an LLM client / retriever object.
+        # client/retriever/policy go in config (runtime) so they are NOT checkpointed —
+        # LangGraph's serializer cannot persist these live objects.
         return {
             "configurable": {
                 "thread_id": thread_id,
                 "client": client,
                 "retriever": retriever,
+                "policy": policy,
             }
         }
 
@@ -88,11 +90,14 @@ class GraphRunner:
         thread_id: str | None = None,
         client: LLMClient | None = None,
         retriever: KnowledgeRetriever | None = None,
+        policy: object | None = None,
     ) -> dict:
         """Run a finding through the graph; pause at the HITL gate if required."""
         thread_id = thread_id or uuid.uuid4().hex
         state: dict[str, Any] = {"finding": dict(finding)}
-        config = self._config(thread_id, client=client, retriever=retriever)
+        config = self._config(
+            thread_id, client=client, retriever=retriever, policy=policy
+        )
         result = self._graph.invoke(state, config)
         return self._finalize(thread_id, result)
 
