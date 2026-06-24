@@ -168,6 +168,30 @@ isolated by **per-tenant file** (`secops.<tenant>.db`). True **Postgres** multi-
 (a tenant column / schema-per-tenant) and a Redis-backed distributed rate limiter are the
 production follow-ups — the seams (`_scope_settings`, `RateLimiter.check`) are already in place.
 
+### ADR-018 — Ticket lifecycle sync & remediation tracking (SLA)
+**Decision:** Track every finding to closure, not just to ticket-creation. Tickets carry a
+lifecycle (`open → in_progress → resolved/closed`) with `createdAt`/`resolvedAt`; a
+`transition(finding_hash, status)` method on every provider is the **inbound** half of
+bi-directional sync (an external system or human closing the ticket), and `POST
+/remediation/sync` reconciles findings with already-resolved tickets (e.g. after polling
+real Jira). A resolving transition appends a `ticket_resolved` audit event (actor `provider`)
+so the current-state findings view and the compliance log reflect closure. A pure
+`app/remediation.py` holds the **SLA policy** (time-to-remediate budget per severity:
+critical 24h, high 72h, medium 7d, low 30d; info none) and projects findings+tickets into a
+**remediation view** — per-item SLA status (on-track / at-risk / breached / resolved) plus a
+portfolio summary (open vs resolved, breach/at-risk counts, **SLA compliance**, and **mean
+time-to-remediate**), surfaced at `GET /remediation` and on the dashboard.
+**Why:** "Did we open a ticket?" is the wrong success metric for a security platform; "did the
+risk get fixed, and in time?" is the real one. SLA timers and MTTR make the platform
+accountable for outcomes, and lifecycle sync keeps platform state honest when the fix happens
+in the ticketing system. Keeping the SLA math a pure, time-injectable function makes it
+reproducible and testable; reusing the append-only audit trail for resolution avoids a second
+source of truth (the findings view is still a projection of events).
+**Tradeoff:** Ticket status lives in the (in-memory) provider, so for the durable backends a
+restart keeps the *resolution* (it's in the persisted audit trail) but not interim ticket
+status; persisting ticket state and a real Jira transition-id mapping are the production
+follow-ups (the `transition` seam is already provider-agnostic).
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

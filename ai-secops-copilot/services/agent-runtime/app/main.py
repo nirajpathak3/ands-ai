@@ -64,6 +64,7 @@ from .observability import (
 from .pipeline import run_pipeline
 from .rag import get_retriever
 from .ratelimit import get_rate_limiter
+from .remediation import RESOLVED_STATUSES, VALID_STATUSES, build_remediation
 from .schemas import AnalyzeRequest, Finding
 from .tenancy import TenantContext, TenantRegistry
 
@@ -571,3 +572,95 @@ def list_dead_letter(ctx: CtxDep) -> dict:
         "count": len(items),
         "items": [{"findingHash": i.findingHash, "error": i.error} for i in items],
     }
+
+
+# --- Day 16: ticket lifecycle sync + remediation tracking -------------------
+
+class TransitionRequest(BaseModel):
+    status: str
+
+
+def _latest_audit_by_hash(ctx: TenantContext) -> dict:
+    latest = {}
+    for r in ctx.audit.list_all():
+        latest[r.findingHash] = r
+    return latest
+
+
+def _record_resolution(ctx: TenantContext, finding_hash: str) -> bool:
+    """Append a ``ticket_resolved`` audit event for a finding (idempotent).
+
+    Reconstructs the decision from the finding's latest audit record so the
+    current-state findings view reflects resolution and the compliance log keeps the
+    full lifecycle. Returns True if a new event was recorded.
+    """
+    latest = _latest_audit_by_hash(ctx).get(finding_hash)
+    if latest is None or latest.outcome == "ticket_resolved":
+        return False
+    decision = {
+        "findingHash": latest.findingHash,
+        "findingId": latest.findingId,
+        "disposition": latest.disposition,
+        "reasonCode": latest.reasonCode,
+        "analysis": {
+            "severity": latest.severity,
+            "confidence": latest.confidence,
+            "recommendedAction": latest.recommendedAction,
+        },
+    }
+    ctx.audit.record(decision, "ticket_resolved", actor="provider")
+    return True
+
+
+@app.get("/remediation")
+def remediation(ctx: CtxDep) -> dict:
+    """Remediation view: every ticket with its SLA status, age, and MTTR (Day 16).
+
+    Joins current-state findings with their tickets, computes per-severity SLA budgets,
+    and summarizes the portfolio (open vs resolved, breached/at-risk, SLA compliance,
+    mean time-to-remediate).
+    """
+    findings = project_findings(ctx.audit.list_all())
+    by_hash = {f["findingHash"]: f for f in findings}
+    tickets = [t.to_dict() for t in ctx.provider.all()]
+    return build_remediation(by_hash, tickets)
+
+
+@app.post("/tickets/{finding_hash}/transition")
+def transition_ticket(
+    finding_hash: str, req: TransitionRequest, ctx: CtxDep
+) -> dict:
+    """Apply a ticket lifecycle status (the inbound half of bi-directional sync).
+
+    Models an external system (Jira/ServiceNow) or a human moving the ticket — e.g.
+    ``resolved``. On a resolving transition the finding is marked resolved in the audit
+    trail so the current-state view and remediation metrics reflect closure.
+    """
+    status = req.status.strip().lower()
+    if status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid: {sorted(VALID_STATUSES)}",
+        )
+    ticket = ctx.provider.transition(finding_hash, status)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"No ticket for finding {finding_hash}")
+    resolved = status in RESOLVED_STATUSES
+    if resolved:
+        _record_resolution(ctx, finding_hash)
+    return {"ticket": ticket.to_dict(), "resolved": resolved}
+
+
+@app.post("/remediation/sync")
+def remediation_sync(ctx: CtxDep) -> dict:
+    """Reconcile findings with resolved tickets (e.g. after polling a real provider).
+
+    Idempotently records a ``ticket_resolved`` audit event for any ticket already in a
+    terminal state whose finding isn't yet marked resolved — so an out-of-band closure
+    (a developer closing the Jira issue) flows back into the platform's state.
+    """
+    reconciled = 0
+    for t in ctx.provider.all():
+        if t.status in RESOLVED_STATUSES and _record_resolution(ctx, t.findingHash):
+            reconciled += 1
+    return {"reconciled": reconciled}

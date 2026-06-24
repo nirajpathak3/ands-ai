@@ -396,4 +396,5 @@ flowchart TB
 | Vector store | pgvector (required) | **Lexical retriever** default; pgvector behind the `KnowledgeRetriever` seam |
 | State | Postgres | **memory → SQLite → Postgres** via `DATABASE_URL` (identical SQL schema) |
 | Tenancy/auth | — | **Per-tenant isolated state** + API-key/HS256-JWT auth + rate limiting (Day 15, ADR-017); off by default |
+| Lifecycle | open ticket only | **Ticket lifecycle sync + SLA/MTTR remediation tracking** (Day 16, ADR-018); `transition()` + `/remediation` |
 | Run | — | `python scripts/demo_walkthrough.py` (offline) · `docker compose up` (full stack) |

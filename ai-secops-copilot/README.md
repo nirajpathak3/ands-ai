@@ -285,8 +285,22 @@ all 134 tests run unchanged; flip one env var to enforce. `/health`, `/dashboard
 `/governance/preview` stay open for liveness. 20 new tests cover JWT verification, auth modes,
 tenant isolation, and rate limiting.
 
-**Next — Day 16:** ticket lifecycle sync & remediation tracking — bi-directional status sync
-(ticket closed → finding resolved), SLA timers, and a remediation view on the dashboard.
+**Day 16 complete — ticket lifecycle sync & remediation tracking:** the platform now tracks
+findings to **closure**, not just ticket creation (ADR-018). Tickets carry a lifecycle
+(`open → in_progress → resolved/closed`) with `createdAt`/`resolvedAt`; a provider-agnostic
+`transition()` is the inbound half of **bi-directional sync** (`POST /tickets/{hash}/transition`
+models an external system or human closing the ticket), and `POST /remediation/sync` reconciles
+findings with already-resolved tickets (e.g. after polling real Jira) — a resolving transition
+writes a `ticket_resolved` audit event so the current-state findings view reflects closure. A
+pure `app/remediation.py` adds **SLA timers** (time-to-remediate budgets per severity: critical
+24h, high 72h, medium 7d, low 30d) and a **remediation view** (`GET /remediation`) with per-item
+SLA status (on-track / at-risk / breached / resolved) plus a portfolio summary — open vs resolved,
+breach/at-risk counts, **SLA compliance**, and **mean time-to-remediate (MTTR)** — surfaced on the
+dashboard with one-click **Resolve**. 13 new tests; 147 total + eval gate green.
+
+**Next — Day 17:** notifications & webhooks — outbound alerts (Slack/email/webhook) on
+escalations, SLA breaches, and approvals, plus inbound provider webhooks for real-time
+lifecycle sync.
 
 ## Documentation
 

@@ -53,6 +53,11 @@
   .chip.auto_execute { color: #c7f9e5; background: #103a2e; border-color: #1c6b50; }
   .chip.human_approval { color: #fde9bf; background: #3a2f10; border-color: #6b561c; }
   .chip.escalate { color: #fbd0d0; background: #3a1414; border-color: #6b2020; }
+  .chip.on_track { color: #c7f9e5; background: #103a2e; border-color: #1c6b50; }
+  .chip.at_risk { color: #fde9bf; background: #3a2f10; border-color: #6b561c; }
+  .chip.breached { color: #fbd0d0; background: #3a1414; border-color: #6b2020; }
+  .chip.resolved { color: #c7dbff; background: #10243a; border-color: #1c4a6b; }
+  .chip.none { color: var(--muted); }
   .sev.critical, .sev.high { color: var(--danger); font-weight: 700; }
   .sev.medium { color: var(--warn); }
   .sev.low, .sev.info { color: var(--muted); }
@@ -126,6 +131,16 @@
       <div id="approvals"><div class="empty">Nothing waiting.</div></div>
     </section>
   </div>
+
+  <section class="card" style="margin-top:14px">
+    <h2>Remediation &amp; SLA tracking (ticket lifecycle &middot; time-to-remediate)</h2>
+    <div class="grid kpis" id="remSummary" style="margin-bottom:14px"></div>
+    <table>
+      <thead><tr><th>Finding</th><th>Sev</th><th>Ticket</th><th>Status</th>
+        <th>SLA</th><th>Age (h)</th><th>Due in / MTTR</th><th></th></tr></thead>
+      <tbody id="remediation"><tr><td class="empty" colspan="8">No tickets yet — run the demo.</td></tr></tbody>
+    </table>
+  </section>
 
   <section class="card" style="margin-top:14px">
     <h2>AI Gateway (single LLM egress &middot; routing, cache, fallback, cost)</h2>
@@ -231,6 +246,62 @@ async function act(kind, hash) {
   } catch (e) { toast("Error: " + e.message); }
 }
 
+function fmtHours(h) {
+  if (h === null || h === undefined) return "—";
+  if (Math.abs(h) >= 48) return (h / 24).toFixed(1) + "d";
+  return h.toFixed(1) + "h";
+}
+
+function renderRemediation(data) {
+  const s = data.summary || {};
+  $("#remSummary").innerHTML = [
+    kpiCard("Open", s.open || 0, `${s.resolved || 0} resolved`),
+    kpiCard("SLA breached", s.breached || 0, `${s.atRisk || 0} at risk`),
+    kpiCard("On track", s.onTrack || 0, "within SLA budget"),
+    kpiCard("SLA compliance", pct(s.slaCompliance ?? 1), "resolved within SLA"),
+    kpiCard("Mean MTTR", fmtHours(s.mttrHoursMean || 0), "time to remediate"),
+  ].join("");
+
+  const items = data.items || [];
+  if (!items.length) {
+    $("#remediation").innerHTML = `<tr><td class="empty" colspan="8">No tickets yet — run the demo.</td></tr>`;
+    return;
+  }
+  $("#remediation").innerHTML = items.map((i) => {
+    const dueOrMttr = i.slaStatus === "resolved"
+      ? fmtHours(i.mttrHours) + " (MTTR)"
+      : fmtHours(i.remainingHours);
+    const action = i.slaStatus === "resolved"
+      ? "—"
+      : `<button data-resolve="${i.findingHash}">Resolve</button>`;
+    return `
+    <tr>
+      <td class="mono">${i.findingId || (i.findingHash || "").slice(0, 8)}</td>
+      <td class="sev ${i.severity}">${i.severity}</td>
+      <td class="mono">${i.ticketKey || "—"}</td>
+      <td>${i.status}</td>
+      <td><span class="chip ${i.slaStatus}">${i.slaStatus.replace("_", " ")}</span></td>
+      <td class="mono">${(i.ageHours ?? 0).toFixed(1)}</td>
+      <td class="mono">${dueOrMttr}</td>
+      <td class="row-actions">${action}</td>
+    </tr>`;
+  }).join("");
+  document.querySelectorAll("[data-resolve]").forEach((b) =>
+    b.onclick = () => resolveTicket(b.getAttribute("data-resolve")));
+}
+
+async function resolveTicket(hash) {
+  try {
+    await api(`/tickets/${hash}/transition`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "resolved" }),
+    });
+    toast("Ticket resolved — finding closed.");
+    refresh();
+  } catch (e) { toast("Error: " + e.message); }
+}
+
 function renderGateway(g) {
   const providers = (g.providers || []).join(", ") || "—";
   $("#gateway").innerHTML = [
@@ -260,12 +331,14 @@ function renderSpark(recent) {
 
 async function refresh() {
   try {
-    const [m, findings, approvals, health, gw, al, ts] = await Promise.all([
+    const [m, findings, approvals, health, gw, al, ts, rem] = await Promise.all([
       api("/metrics"), api("/findings"), api("/approvals"), api("/health"),
       api("/gateway/metrics"), api("/observability/alerts"), api("/observability/timeseries"),
+      api("/remediation"),
     ]);
     renderKpis(m); renderFindings(findings.findings); renderApprovals(approvals.pending);
     renderGateway(gw); renderAlerts(al.alerts); renderSpark(ts.recentLlm);
+    renderRemediation(rem);
     $("#env").textContent = `${health.service} v${health.version} · ${health.environment}`;
     $("#provider").textContent =
       `provider: ${health.ticketProvider} · RAG: ${health.knowledge.ragEnabled ? "on" : "off"} · LLM: ${(health.llm && health.llm.providers || []).join("/") || "deterministic"}`;

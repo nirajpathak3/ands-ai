@@ -31,10 +31,11 @@ python scripts/demo_walkthrough.py        # (or: make demo)
 
 See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
 
-## Status (Day 15 — multi-tenant isolation & API auth)
+## Status (Day 16 — ticket lifecycle sync & remediation tracking)
 
 | Piece | State |
 | --- | --- |
+| **Remediation & SLA** (`app/remediation.py`: SLA timers, MTTR, remediation view + sync) | ✅ implemented + tested |
 | **Multi-tenancy** (`app/tenancy.py`: per-tenant state/provider/gateway/graph; SQLite per-tenant file) | ✅ implemented + tested |
 | **API auth** (`app/auth.py`: API key + stdlib HS256 JWT, tenant resolution) | ✅ implemented + tested |
 | **Rate limiting** (`app/ratelimit.py`: per-tenant fixed window, 429 + Retry-After) | ✅ implemented + tested |
@@ -222,6 +223,27 @@ curl localhost:8088/metrics -H "Authorization: Bearer <jwt-with-tenant-claim>"
 `/health`, `/dashboard`, and `/governance/preview` stay open (liveness/demo). Over the
 `RATE_LIMIT_RPM` budget a tenant gets `429` with a `Retry-After` header.
 
+### Remediation & SLA tracking (Day 16)
+
+Findings are tracked to closure with per-severity SLA budgets (critical 24h / high 72h /
+medium 7d / low 30d). Tickets have a lifecycle; closing one (an external system or a human)
+flows back into platform state:
+
+```bash
+curl localhost:8088/remediation            # SLA view: per-ticket status + portfolio summary
+
+# Inbound lifecycle sync — resolve a ticket (marks the finding resolved + records audit):
+curl -X POST localhost:8088/tickets/<finding_hash>/transition \
+  -H "content-type: application/json" -d '{"status": "resolved"}'
+
+# Reconcile findings with any already-resolved tickets (e.g. after polling real Jira):
+curl -X POST localhost:8088/remediation/sync
+```
+
+`/remediation` returns each ticket's `slaStatus` (on_track / at_risk / breached / resolved),
+age, time-to-due, and MTTR for resolved items, plus a summary (open vs resolved, breach/at-risk
+counts, SLA compliance, mean MTTR). The dashboard renders this with a one-click **Resolve**.
+
 ### Run in Docker (Day 13)
 
 The image is multi-stage and non-root, with a `/health` healthcheck. Build it from the **repo
@@ -265,6 +287,7 @@ app/
 ├─ prompts.py       # analysis prompt + prompt-injection isolation (ADR-011)
 ├─ llm.py           # LLMClient seam + analyze_and_validate (bounded re-prompt)
 ├─ ticketing.py     # orchestration: idempotent contract, approval/escalation/dead-letter/audit
+├─ remediation.py   # SLA policy + ticket lifecycle + remediation view/MTTR (Day 16, ADR-018)
 ├─ providers/       # ticket adapters: mock, jira (real REST v3), servicenow (mock), factory
 ├─ pipeline.py      # end-to-end run_pipeline (Finding -> RAG -> analysis -> gov -> action)
 ├─ metrics.py       # dashboard KPI aggregation over the audit trail

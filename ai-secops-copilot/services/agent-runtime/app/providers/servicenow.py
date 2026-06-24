@@ -26,6 +26,15 @@ _SEVERITY_TO_PRIORITY = {
     "info": "5 - Planning",
 }
 
+# Lifecycle status -> ServiceNow incident state (illustrative).
+_STATUS_TO_STATE = {
+    "open": "New",
+    "in_progress": "In Progress",
+    "resolved": "Resolved",
+    "closed": "Closed",
+    "done": "Closed",
+}
+
 
 class ServiceNowTicketProvider:
     """In-memory ServiceNow stand-in with incident-table-like records."""
@@ -79,3 +88,15 @@ class ServiceNowTicketProvider:
 
     def all(self) -> list[Ticket]:
         return list(self._by_hash.values())
+
+    def transition(self, finding_hash: str, status: str) -> Ticket | None:
+        """Apply a lifecycle status, mirroring it onto the incident record state."""
+        ticket = self._by_hash.get(finding_hash)
+        if ticket is None:
+            return None
+        ticket.apply_status(status)
+        # Reflect onto the incident-table-like record (illustrative state mapping).
+        for record in self.records.values():
+            if record.get("correlation_id") == finding_hash:
+                record["state"] = _STATUS_TO_STATE.get(status, "In Progress")
+        return ticket

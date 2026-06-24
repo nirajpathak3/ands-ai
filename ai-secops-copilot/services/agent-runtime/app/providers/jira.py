@@ -152,6 +152,20 @@ class JiraTicketProvider:
     def all(self) -> list[Ticket]:
         return list(self._seen.values())
 
+    def transition(self, finding_hash: str, status: str) -> Ticket | None:
+        """Reflect a lifecycle status locally (Day 16).
+
+        A production transition would resolve the target Jira *transition id* (the
+        workflow is project-specific) via ``GET /issue/{key}/transitions`` and
+        ``POST`` it; the platform-side lifecycle/SLA tracking is driven from the
+        cached ticket here so the remediation view works the same across providers.
+        """
+        ticket = self._seen.get(finding_hash)
+        if ticket is None:
+            return None
+        ticket.apply_status(status)
+        return ticket
+
     def close(self) -> None:
         if self._owns_client:
             self._client.close()

@@ -24,8 +24,14 @@ from __future__ import annotations
 import datetime as _dt
 import itertools
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Protocol
+
+from .remediation import RESOLVED_STATUSES
+
+
+def _now_iso() -> str:
+    return _dt.datetime.now(_dt.UTC).isoformat()
 
 
 @dataclass
@@ -38,9 +44,21 @@ class Ticket:
     status: str = "open"
     createdVia: str = "auto"  # "auto" | "approval"
     provider: str = "mock"
+    # Lifecycle tracking (Day 16): when the ticket opened and (if any) closed.
+    createdAt: str = field(default_factory=_now_iso)
+    resolvedAt: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def apply_status(self, status: str) -> None:
+        """Apply a lifecycle transition, stamping/clearing ``resolvedAt`` accordingly."""
+        self.status = status
+        if status in RESOLVED_STATUSES:
+            if self.resolvedAt is None:
+                self.resolvedAt = _now_iso()
+        else:
+            self.resolvedAt = None  # reopened
 
 
 class TicketProvider(Protocol):
@@ -55,6 +73,10 @@ class TicketProvider(Protocol):
         ...
 
     def all(self) -> list[Ticket]:
+        ...
+
+    def transition(self, finding_hash: str, status: str) -> Ticket | None:
+        """Apply a lifecycle status to a ticket (inbound sync); None if not found."""
         ...
 
 
@@ -101,6 +123,13 @@ class MockTicketProvider:
 
     def all(self) -> list[Ticket]:
         return list(self._by_hash.values())
+
+    def transition(self, finding_hash: str, status: str) -> Ticket | None:
+        ticket = self._by_hash.get(finding_hash)
+        if ticket is None:
+            return None
+        ticket.apply_status(status)
+        return ticket
 
     def clear(self) -> None:
         self._by_hash.clear()
