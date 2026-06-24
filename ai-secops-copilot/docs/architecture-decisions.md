@@ -146,6 +146,28 @@ makes the whole system runnable with one command for demos and reviewers.
 **zero application code changes**. The image defaults to the in-memory backend; compose points it at a
 durable SQLite volume, with the Postgres DSN documented as the production switch.
 
+### ADR-017 — Multi-tenancy & API authentication
+**Decision:** Make the runtime multi-tenant with isolated per-tenant state and authenticate the
+data plane. A `TenantRegistry` lazily builds one `TenantContext` per tenant — its **own** audit
+trail, approvals, escalations, dead-letter, ticket provider (idempotency + tickets), AI Gateway
+(semantic cache + cost), and compiled-graph checkpointer — so one customer can never read or
+affect another's. Auth supports two stdlib-verified mechanisms behind one `authenticate()` seam:
+an **API key** (`X-API-Key` or `Authorization: Bearer <key>`, mapped to a tenant via `API_KEYS`)
+and a **signed HS256 JWT** (`JWT_SECRET`, tenant from the `tenant` claim, `exp` enforced). A small
+per-tenant fixed-window **rate limiter** (`RATE_LIMIT_RPM`) returns `429` + `Retry-After`. Each
+data endpoint depends on `get_ctx` (authenticate → rate-limit → resolve tenant); `/health`,
+`/dashboard`, and `/governance/preview` stay open for liveness/demo.
+**Why:** A real platform serves many customers; isolation and authn/z are table stakes, and cost
+attribution per tenant falls out of per-tenant gateways. Keeping it **off by default**
+(`AUTH_ENABLED=false`, tenant from `X-Tenant-Id`, defaulting to `public`) preserves the
+offline/zero-setup property — every existing test and the demo walkthrough run unchanged — while
+flipping one env var turns on enforcement. Hand-rolling HS256 with `hmac`/`hashlib` avoids adding
+a JWT dependency, consistent with the stdlib-first ethos (ADR-013/015).
+**Tradeoff:** In-memory tenants get independent objects for free; the durable **SQLite** backend is
+isolated by **per-tenant file** (`secops.<tenant>.db`). True **Postgres** multi-tenant isolation
+(a tenant column / schema-per-tenant) and a Redis-backed distributed rate limiter are the
+production follow-ups — the seams (`_scope_settings`, `RateLimiter.check`) are already in place.
+
 ---
 
 > Note: All security-domain modeling here is implemented clean-room from public standards (SARIF, OWASP, CWE,

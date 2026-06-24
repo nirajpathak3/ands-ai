@@ -31,10 +31,13 @@ python scripts/demo_walkthrough.py        # (or: make demo)
 
 See the recorded run in [`docs/demo/walkthrough.md`](../../docs/demo/walkthrough.md).
 
-## Status (Day 14 — end-to-end demo polish & docs)
+## Status (Day 15 — multi-tenant isolation & API auth)
 
 | Piece | State |
 | --- | --- |
+| **Multi-tenancy** (`app/tenancy.py`: per-tenant state/provider/gateway/graph; SQLite per-tenant file) | ✅ implemented + tested |
+| **API auth** (`app/auth.py`: API key + stdlib HS256 JWT, tenant resolution) | ✅ implemented + tested |
+| **Rate limiting** (`app/ratelimit.py`: per-tenant fixed window, 429 + Retry-After) | ✅ implemented + tested |
 | **Demo walkthrough** (`scripts/demo_walkthrough.py`: offline end-to-end, doubles as smoke test) | ✅ implemented |
 | **Container image** (multi-stage, non-root, healthcheck) + **compose** stack | ✅ builds in CI |
 | **CI/CD** (py 3.11/3.12 matrix, Node gateway job, image build + GHCR publish) | ✅ implemented |
@@ -192,6 +195,33 @@ curl localhost:8088/observability/traces       # recent spans (pipeline.run -> n
   `ALERT_FALLBACK_RATE`, `ALERT_P95_LATENCY_MS`, `ALERT_COST_PER_REQUEST_USD`,
   `ALERT_APPROVAL_BACKLOG`); firing alerts show on the dashboard and in `/health`.
 
+### Multi-tenancy & API auth (Day 15)
+
+Off by default — the runtime stays open offline and every request resolves to `DEFAULT_TENANT`
+(`public`). Pick another tenant per request with the `X-Tenant-Id` header; each tenant gets its
+own isolated audit trail, approvals, tickets, gateway cache/cost, and graph state.
+
+```bash
+# Isolation demo (no auth): two tenants never see each other's findings
+curl -X POST localhost:8088/demo/seed -H "X-Tenant-Id: acme"
+curl localhost:8088/findings -H "X-Tenant-Id: acme"    # acme's findings
+curl localhost:8088/findings -H "X-Tenant-Id: globex"  # empty — isolated
+```
+
+Turn on enforcement with `AUTH_ENABLED=true`. Authenticate with an API key or a signed HS256 JWT:
+
+```bash
+AUTH_ENABLED=true API_KEYS="keyA:acme,keyB:globex" JWT_SECRET=s3cret \
+  RATE_LIMIT_RPM=120 python -m uvicorn app.main:app --port 8088
+
+curl localhost:8088/metrics                              # 401 (no creds)
+curl localhost:8088/metrics -H "X-API-Key: keyA"         # 200, tenant=acme
+curl localhost:8088/metrics -H "Authorization: Bearer <jwt-with-tenant-claim>"
+```
+
+`/health`, `/dashboard`, and `/governance/preview` stay open (liveness/demo). Over the
+`RATE_LIMIT_RPM` budget a tenant gets `429` with a `Retry-After` header.
+
 ### Run in Docker (Day 13)
 
 The image is multi-stage and non-root, with a `/health` healthcheck. Build it from the **repo
@@ -242,6 +272,9 @@ app/
 ├─ observability/   # tracing + time-series + alerts + Prometheus exposition (Day 12)
 ├─ persistence/     # durable state seam: memory / sqlite_store / checkpointer factory
 ├─ config.py        # env-driven settings (incl. DATABASE_URL backend selection)
+├─ auth.py          # API-key + HS256 JWT auth, tenant resolution (Day 15, ADR-017)
+├─ ratelimit.py     # per-tenant fixed-window rate limiter (Day 15)
+├─ tenancy.py       # TenantRegistry: isolated per-tenant state/provider/gateway/graph
 ├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)
 ├─ static/          # single-page operations dashboard (served at /dashboard)
 └─ graph/           # LangGraph: state, nodes, build (compiled graph), runner (HITL+checkpoint)

@@ -27,6 +27,13 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Service
@@ -104,6 +111,35 @@ class Settings:
     #   postgresql://...    -> Postgres (production; same SQL schema)
     database_url: str = os.environ.get("DATABASE_URL", "")
     redis_url: str = os.environ.get("REDIS_URL", "")
+
+    # Multi-tenancy & API auth (Day 15, ADR-017). Off by default so the offline/dev
+    # experience stays open (every request resolves to ``default_tenant``). When
+    # AUTH_ENABLED=true the runtime requires an API key (``X-API-Key`` or
+    # ``Authorization: Bearer``) or a signed JWT (HS256) carrying a ``tenant`` claim.
+    auth_enabled: bool = _env_bool("AUTH_ENABLED", False)
+    # API keys map a credential to a tenant: "key1:tenantA,key2:tenantB".
+    api_keys_raw: str = os.environ.get("API_KEYS", "")
+    jwt_secret: str = os.environ.get("JWT_SECRET", "")
+    jwt_algorithm: str = os.environ.get("JWT_ALGORITHM", "HS256")
+    # When auth is disabled, a request may still pick a tenant via the X-Tenant-Id
+    # header (so isolation is demoable offline); otherwise this default is used.
+    default_tenant: str = os.environ.get("DEFAULT_TENANT", "public")
+    # Per-tenant fixed-window rate limit (requests/minute). 0 disables limiting.
+    rate_limit_rpm: int = int(os.environ.get("RATE_LIMIT_RPM", "0"))
+
+    @property
+    def api_keys(self) -> dict[str, str]:
+        """Parse ``API_KEYS`` into a ``{api_key: tenant_id}`` mapping."""
+        mapping: dict[str, str] = {}
+        for pair in (self.api_keys_raw or "").split(","):
+            pair = pair.strip()
+            if not pair or ":" not in pair:
+                continue
+            key, tenant = pair.split(":", 1)
+            key, tenant = key.strip(), tenant.strip()
+            if key and tenant:
+                mapping[key] = tenant
+        return mapping
 
     @property
     def persistence_backend(self) -> str:

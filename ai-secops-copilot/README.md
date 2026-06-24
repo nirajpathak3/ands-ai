@@ -272,8 +272,21 @@ test (`make demo`). The recorded run lives in [`docs/demo/walkthrough.md`](docs/
 and the architecture diagrams gained an **as-built (Day 14)** topology that reconciles the target
 vision with what actually runs today ([docs/diagrams/architecture.md](docs/diagrams/architecture.md) §9).
 
-**Next — Day 15:** multi-tenant isolation & API auth — per-tenant state/credentials, API-key/JWT
-auth on the runtime endpoints, and rate limiting.
+**Day 15 complete — multi-tenant isolation & API auth:** the runtime is now multi-tenant. A
+`TenantRegistry` gives every tenant its **own** isolated state (audit trail, approvals,
+escalations, dead-letter, ticket provider, AI Gateway cache/cost, and graph checkpointer), so one
+customer can never see or affect another's data (durable SQLite is isolated per-tenant file).
+The data plane is authenticated two ways behind one seam (ADR-017): an **API key** (`X-API-Key` or
+`Authorization: Bearer`, mapped to a tenant via `API_KEYS`) and a **signed HS256 JWT** (`JWT_SECRET`,
+tenant from the `tenant` claim, verified with the standard library — no PyJWT). A per-tenant
+fixed-window **rate limiter** (`RATE_LIMIT_RPM`) returns `429 + Retry-After`. It's **off by default**
+(`AUTH_ENABLED=false`; pick a tenant with `X-Tenant-Id`, default `public`) so the offline demo and
+all 134 tests run unchanged; flip one env var to enforce. `/health`, `/dashboard`, and
+`/governance/preview` stay open for liveness. 20 new tests cover JWT verification, auth modes,
+tenant isolation, and rate limiting.
+
+**Next — Day 16:** ticket lifecycle sync & remediation tracking — bi-directional status sync
+(ticket closed → finding resolved), SLA timers, and a remediation view on the dashboard.
 
 ## Documentation
 

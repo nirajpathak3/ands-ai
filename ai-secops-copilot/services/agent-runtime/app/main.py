@@ -39,17 +39,17 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from . import __version__
-from .config import get_settings
+from .auth import AuthError, Principal, authenticate
+from .config import Settings, get_settings
 from .domain import Action
-from .gateway import get_gateway, reset_gateway
 from .governance import evaluate as governance_evaluate
-from .graph import GraphRunner
 from .ingestion import normalize
 from .metrics import compute_metrics, project_findings
 from .observability import (
@@ -61,11 +61,11 @@ from .observability import (
     render_prometheus,
     reset_observability,
 )
-from .persistence import build_state, get_checkpointer
 from .pipeline import run_pipeline
-from .providers import get_ticket_provider
 from .rag import get_retriever
+from .ratelimit import get_rate_limiter
 from .schemas import AnalyzeRequest, Finding
+from .tenancy import TenantContext, TenantRegistry
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SAMPLES_DIR = _REPO_ROOT / "datasets" / "samples"
@@ -77,36 +77,49 @@ app = FastAPI(
     summary="LangGraph agent runtime: Finding Analysis -> Ticket Decision -> Governance Gate.",
 )
 
-# Provider is selected from config (mock by default; jira/servicenow when set).
-# Day 10 persists approvals via checkpointing.
 configure_logging(get_settings())  # structured JSON logs + trace context (Day 12)
-_provider = get_ticket_provider(get_settings())
+
+# Shared, safe-to-share singletons: the read-only RAG corpus and the process-wide
+# observability tracer/time-series (operator telemetry across tenants).
 _retriever = get_retriever(get_settings())
-_gateway = get_gateway(get_settings())  # single LLM egress (Day 11); metrics accumulate here
 _timeseries = get_timeseries()  # rolling cost/latency series (Day 12)
 _tracer = get_tracer(get_settings())
 
-# Durable state (Day 10): in-memory by default, SQLite/Postgres when DATABASE_URL is set.
-_state = build_state(get_settings())
-_approvals = _state.approvals
-_escalations = _state.escalations
-_dead_letter = _state.dead_letter
-_audit = _state.audit
+# Per-tenant isolated state (Day 15): audit/approvals/escalations/dead-letter, ticket
+# provider, AI Gateway (cache + cost), and compiled graph — one set per tenant, built
+# lazily. With auth disabled every request resolves to ``default_tenant``.
+_registry = TenantRegistry(get_settings())
+_rate_limiter = get_rate_limiter()
 
 
-def _make_graph_runner() -> GraphRunner | None:
-    """Build the compiled-LangGraph runner; None if LangGraph isn't installed."""
+_SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def _principal(request: Request, settings: _SettingsDep) -> Principal:
+    """Authenticate the request into a tenant principal (or 401/403)."""
     try:
-        return GraphRunner(
-            provider=_provider, approvals=_approvals,
-            escalations=_escalations, dead_letter=_dead_letter,
-            checkpointer=get_checkpointer(get_settings()),
+        return authenticate(request.headers, settings)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
+def get_ctx(
+    principal: Annotated[Principal, Depends(_principal)],
+    settings: _SettingsDep,
+) -> TenantContext:
+    """Rate-limit, then resolve the caller's isolated tenant context (Day 15)."""
+    result = _rate_limiter.check(principal.tenant_id, settings.rate_limit_rpm)
+    if not result.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(int(result.retry_after_s) + 1)},
         )
-    except Exception:  # noqa: BLE001 - graph is optional; inline pipeline still works
-        return None
+    return _registry.get(principal.tenant_id)
 
 
-_graph_runner = _make_graph_runner()
+# Type alias so endpoints declare `ctx: CtxDep` (avoids a Depends() call in defaults).
+CtxDep = Annotated[TenantContext, Depends(get_ctx)]
 
 
 @app.get("/", include_in_schema=False)
@@ -124,13 +137,19 @@ def dashboard() -> HTMLResponse:
 
 @app.get("/health")
 def health() -> dict:
+    """Liveness + config snapshot (no auth; used by the container healthcheck).
+
+    Backend details are reported for the default tenant; per-tenant data is only ever
+    served through the authenticated, tenant-scoped endpoints.
+    """
     settings = get_settings()
+    ctx = _registry.get(settings.default_tenant)
     return {
         "status": "ok",
         "service": settings.service_name,
         "version": __version__,
         "environment": settings.environment,
-        "ticketProvider": getattr(_provider, "name", "unknown"),
+        "ticketProvider": getattr(ctx.provider, "name", "unknown"),
         "knowledge": {
             "ragEnabled": settings.rag_enabled,
             "retriever": getattr(_retriever, "name", None),
@@ -142,27 +161,33 @@ def health() -> dict:
             "suggestThreshold": settings.suggest_threshold,
             "suppressAutoThreshold": settings.suppress_auto_threshold,
         },
-        "orchestration": "langgraph" if _graph_runner is not None else "inline",
-        "persistence": _state.backend,
+        "orchestration": "langgraph" if ctx.graph_runner is not None else "inline",
+        "persistence": ctx.state.backend,
+        "tenancy": {
+            "authEnabled": settings.auth_enabled,
+            "defaultTenant": settings.default_tenant,
+            "activeTenants": len(_registry.ids()),
+            "rateLimitRpm": settings.rate_limit_rpm,
+        },
         "llm": {
             "egress": "gateway",
-            "providers": _gateway.metrics()["providers"],
+            "providers": ctx.gateway.metrics()["providers"],
             "cacheEnabled": settings.llm_cache_enabled,
         },
         "observability": {
             "tracing": "otel" if settings.otel_enabled else "in-process",
             "logJson": settings.log_json,
             "alertsFiring": len(
-                evaluate_alerts(_obs_snapshot(), default_rules(settings))
+                evaluate_alerts(_obs_snapshot(ctx), default_rules(settings))
             ),
         },
     }
 
 
 @app.get("/gateway/metrics")
-def gateway_metrics() -> dict:
+def gateway_metrics(ctx: CtxDep) -> dict:
     """AI Gateway egress metrics: requests, cache hits, fallbacks, cost, latency (Day 11)."""
-    return _gateway.metrics()
+    return ctx.gateway.metrics()
 
 
 class GovernancePreviewRequest(BaseModel):
@@ -194,19 +219,19 @@ def governance_preview(req: GovernancePreviewRequest) -> dict:
 
 
 @app.post("/analyze")
-def analyze(req: AnalyzeRequest) -> dict:
+def analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
     """Run a finding through the full walking skeleton and execute the decision."""
     started = time.perf_counter()
     out = run_pipeline(
         req.finding.model_dump(),
-        provider=_provider,
-        approvals=_approvals,
-        escalations=_escalations,
-        dead_letter=_dead_letter,
+        provider=ctx.provider,
+        approvals=ctx.approvals,
+        escalations=ctx.escalations,
+        dead_letter=ctx.dead_letter,
         retriever=_retriever,
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
-    _audit.record(
+    ctx.audit.record(
         out["decision"], out["action"]["outcome"], actor="system", latency_ms=latency_ms
     )
     _observe_decision(out["decision"], out["action"]["outcome"], latency_ms)
@@ -218,16 +243,10 @@ class IngestRequest(BaseModel):
     report: dict
 
 
-@app.post("/ingest")
-def ingest(req: IngestRequest) -> dict:
-    """Normalize a raw scanner report (Semgrep/SARIF) and run each finding.
-
-    The Copilot ingests findings; it does not scan. This maps native scanner output
-    to the normalized contract (ADR-007), then drives every finding through the
-    full pipeline and returns a per-finding result plus an outcome summary.
-    """
+def _run_ingest(report: dict, fmt: str, ctx: TenantContext) -> dict:
+    """Normalize a scanner report and drive every finding through this tenant's pipeline."""
     try:
-        normalized = normalize(req.report, req.format)
+        normalized = normalize(report, fmt)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -242,12 +261,12 @@ def ingest(req: IngestRequest) -> dict:
             continue
         started = time.perf_counter()
         out = run_pipeline(
-            finding.model_dump(), provider=_provider, approvals=_approvals,
-            escalations=_escalations, dead_letter=_dead_letter, retriever=_retriever,
+            finding.model_dump(), provider=ctx.provider, approvals=ctx.approvals,
+            escalations=ctx.escalations, dead_letter=ctx.dead_letter, retriever=_retriever,
         )
         latency_ms = (time.perf_counter() - started) * 1000.0
         outcome = out["action"]["outcome"]
-        _audit.record(out["decision"], outcome, actor="system", latency_ms=latency_ms)
+        ctx.audit.record(out["decision"], outcome, actor="system", latency_ms=latency_ms)
         _observe_decision(out["decision"], outcome, latency_ms)
         summary[outcome] = summary.get(outcome, 0) + 1
         results.append({
@@ -267,9 +286,26 @@ def ingest(req: IngestRequest) -> dict:
     }
 
 
+@app.post("/ingest")
+def ingest(req: IngestRequest, ctx: CtxDep) -> dict:
+    """Normalize a raw scanner report (Semgrep/SARIF) and run each finding.
+
+    The Copilot ingests findings; it does not scan. This maps native scanner output
+    to the normalized contract (ADR-007), then drives every finding through the
+    full pipeline and returns a per-finding result plus an outcome summary.
+    """
+    return _run_ingest(req.report, req.format, ctx)
+
+
 @app.get("/knowledge/search")
-def knowledge_search(q: str, k: int = 3) -> dict:
-    """Retrieve OWASP/CWE guidance for a free-text query (RAG layer demo, ADR-001)."""
+def knowledge_search(
+    ctx: CtxDep, q: str, k: int = 3
+) -> dict:
+    """Retrieve OWASP/CWE guidance for a free-text query (RAG layer demo, ADR-001).
+
+    The knowledge corpus is shared (the same OWASP/CWE for every tenant); the endpoint
+    is still authenticated and rate-limited like the rest of the data plane.
+    """
     if _retriever is None:
         raise HTTPException(status_code=503, detail="RAG is disabled (RAG_ENABLED=false).")
     try:
@@ -288,58 +324,58 @@ def knowledge_search(q: str, k: int = 3) -> dict:
 
 
 @app.get("/approvals")
-def list_approvals() -> dict:
-    pending = _approvals.list_pending()
+def list_approvals(ctx: CtxDep) -> dict:
+    pending = ctx.approvals.list_pending()
     return {"count": len(pending), "pending": [p.decision for p in pending]}
 
 
 @app.post("/approvals/{finding_hash}/approve")
-def approve(finding_hash: str) -> dict:
+def approve(finding_hash: str, ctx: CtxDep) -> dict:
     """Human approves a queued decision -> the ticket is created (HITL gate)."""
-    pending = _approvals.get(finding_hash)
+    pending = ctx.approvals.get(finding_hash)
     try:
-        ticket, created = _approvals.approve(finding_hash, _provider)
+        ticket, created = ctx.approvals.approve(finding_hash, ctx.provider)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"No pending approval for {finding_hash}"
         ) from None
     outcome = "ticket_created" if created else "ticket_exists"
     if pending is not None:
-        _audit.record(pending.decision, outcome, actor="human")
+        ctx.audit.record(pending.decision, outcome, actor="human")
     return {"outcome": outcome, "approvedBy": "human", "ticket": ticket.to_dict()}
 
 
 @app.post("/approvals/{finding_hash}/reject")
-def reject(finding_hash: str) -> dict:
-    pending = _approvals.get(finding_hash)
-    if not _approvals.reject(finding_hash):
+def reject(finding_hash: str, ctx: CtxDep) -> dict:
+    pending = ctx.approvals.get(finding_hash)
+    if not ctx.approvals.reject(finding_hash):
         raise HTTPException(status_code=404, detail=f"No pending approval for {finding_hash}")
     if pending is not None:
-        _audit.record(pending.decision, "rejected", actor="human")
+        ctx.audit.record(pending.decision, "rejected", actor="human")
     return {"outcome": "rejected", "findingHash": finding_hash}
 
 
 @app.get("/tickets")
-def list_tickets() -> dict:
-    tickets = _provider.all()
+def list_tickets(ctx: CtxDep) -> dict:
+    tickets = ctx.provider.all()
     return {"count": len(tickets), "tickets": [t.to_dict() for t in tickets]}
 
 
 @app.get("/escalations")
-def list_escalations() -> dict:
-    items = _escalations.list_all()
+def list_escalations(ctx: CtxDep) -> dict:
+    items = ctx.escalations.list_all()
     return {"count": len(items), "escalations": items}
 
 
 @app.get("/metrics")
-def metrics() -> dict:
+def metrics(ctx: CtxDep) -> dict:
     """Platform KPIs for the dashboard (derived from the audit trail + stores)."""
     return compute_metrics(
-        _audit.list_all(),
-        tickets=len(_provider.all()),
-        pending_approvals=len(_approvals.list_pending()),
-        escalations=len(_escalations.list_all()),
-        dead_letters=len(_dead_letter.list_all()),
+        ctx.audit.list_all(),
+        tickets=len(ctx.provider.all()),
+        pending_approvals=len(ctx.approvals.list_pending()),
+        escalations=len(ctx.escalations.list_all()),
+        dead_letters=len(ctx.dead_letter.list_all()),
     )
 
 
@@ -354,37 +390,45 @@ def _observe_decision(decision: dict, outcome: str, latency_ms: float) -> None:
     )
 
 
-def _obs_snapshot() -> dict:
+def _obs_snapshot(ctx: TenantContext) -> dict:
     """Combined snapshot (KPIs + gateway) that alerts + Prometheus evaluate against."""
     snap = compute_metrics(
-        _audit.list_all(),
-        tickets=len(_provider.all()),
-        pending_approvals=len(_approvals.list_pending()),
-        escalations=len(_escalations.list_all()),
-        dead_letters=len(_dead_letter.list_all()),
+        ctx.audit.list_all(),
+        tickets=len(ctx.provider.all()),
+        pending_approvals=len(ctx.approvals.list_pending()),
+        escalations=len(ctx.escalations.list_all()),
+        dead_letters=len(ctx.dead_letter.list_all()),
     )
-    snap["gateway"] = _gateway.metrics()
+    snap["gateway"] = ctx.gateway.metrics()
     return snap
 
 
 @app.get("/observability/alerts")
-def observability_alerts() -> dict:
+def observability_alerts(ctx: CtxDep) -> dict:
     """Firing alerts over governance/cost/reliability signals (Day 12, ADR-015)."""
-    alerts = evaluate_alerts(_obs_snapshot(), default_rules(get_settings()))
+    alerts = evaluate_alerts(_obs_snapshot(ctx), default_rules(get_settings()))
     return {"count": len(alerts), "alerts": alerts}
 
 
 @app.get("/observability/metrics")
-def observability_metrics() -> PlainTextResponse:
+def observability_metrics(ctx: CtxDep) -> PlainTextResponse:
     """Prometheus text exposition of platform + gateway metrics and alert states."""
-    snapshot = _obs_snapshot()
+    snapshot = _obs_snapshot(ctx)
     alerts = evaluate_alerts(snapshot, default_rules(get_settings()))
     return PlainTextResponse(render_prometheus(snapshot, alerts))
 
 
 @app.get("/observability/timeseries")
-def observability_timeseries(window_s: float = 300.0, bucket_s: float = 30.0) -> dict:
-    """Bucketed cost/latency over time for charting (LLM calls + decisions)."""
+def observability_timeseries(
+    ctx: CtxDep,
+    window_s: float = 300.0,
+    bucket_s: float = 30.0,
+) -> dict:
+    """Bucketed cost/latency over time for charting (LLM calls + decisions).
+
+    The time-series is process-wide operator telemetry (shared across tenants); the
+    endpoint is authenticated like the rest of the data plane.
+    """
     return {
         "windowS": window_s,
         "bucketS": bucket_s,
@@ -395,17 +439,20 @@ def observability_timeseries(window_s: float = 300.0, bucket_s: float = 30.0) ->
 
 
 @app.get("/observability/traces")
-def observability_traces(limit: int = 50) -> dict:
-    """Recent spans from the in-process tracer (newest first)."""
+def observability_traces(
+    ctx: CtxDep, limit: int = 50
+) -> dict:
+    """Recent spans from the in-process tracer (newest first; process-wide)."""
     return {"count": min(limit, 512), "spans": _tracer.recent(limit)}
 
 
 @app.post("/demo/seed")
-def demo_seed() -> dict:
+def demo_seed(ctx: CtxDep) -> dict:
     """One-click demo: ingest the bundled Semgrep + SARIF sample reports.
 
     Drives the memorable walkthrough — a critical SQLi auto-creates a ticket while a
     medium finding waits for human approval — without any external scanner or creds.
+    Seeds into the caller's tenant only.
     """
     seeded: dict[str, dict] = {}
     for name, fmt in (("semgrep-sample.json", "semgrep"), ("sarif-sample.json", "sarif")):
@@ -413,29 +460,26 @@ def demo_seed() -> dict:
         if not path.exists():
             continue
         report = json.loads(path.read_text(encoding="utf-8"))
-        seeded[name] = ingest(IngestRequest(format=fmt, report=report))
+        seeded[name] = _run_ingest(report, fmt, ctx)
     if not seeded:
         raise HTTPException(status_code=404, detail="No sample reports found to seed.")
     return {"seeded": list(seeded.keys()), "reports": seeded}
 
 
 @app.post("/demo/reset")
-def demo_reset() -> dict:
-    """Clear state (audit, approvals, escalations, dead-letters, tickets).
+def demo_reset(ctx: CtxDep) -> dict:
+    """Clear the caller's tenant state (audit, approvals, escalations, dead-letters, tickets).
 
     The audit trail is intentionally append-only, so re-seeding accumulates events; this
     truncates the stores to a clean slate (in place, so it works for the durable SQLite/
     Postgres backends too — unlike a process restart, which now *keeps* persisted state).
-    Idempotent ticket creation means re-seeding never duplicates tickets.
+    Idempotent ticket creation means re-seeding never duplicates tickets. Rebuilds the
+    tenant's gateway (drops cache + metrics) and graph checkpointer; clears the shared
+    observability buffers.
     """
-    global _graph_runner, _gateway
-    _state.clear()          # truncate durable stores in place (any backend)
-    if hasattr(_provider, "clear"):
-        _provider.clear()   # drop mock tickets so idempotency starts fresh
-    _gateway = reset_gateway(get_settings())  # drop gateway cache + metrics
-    reset_observability(get_settings())       # clear traces + time-series
-    _graph_runner = _make_graph_runner()  # fresh checkpointer for the HITL graph
-    return {"status": "reset", "backend": _state.backend}
+    new_ctx = _registry.reset(ctx.tenant_id)  # truncate stores + rebuild gateway/graph
+    reset_observability(get_settings())        # clear traces + time-series (shared)
+    return {"status": "reset", "tenant": new_ctx.tenant_id, "backend": new_ctx.state.backend}
 
 
 class GraphResumeRequest(BaseModel):
@@ -443,53 +487,55 @@ class GraphResumeRequest(BaseModel):
 
 
 @app.get("/graph", include_in_schema=True)
-def graph_structure() -> dict:
+def graph_structure(ctx: CtxDep) -> dict:
     """Introspect the compiled LangGraph (nodes + mermaid) — the orchestration story."""
-    if _graph_runner is None:
+    if ctx.graph_runner is None:
         raise HTTPException(status_code=503, detail="LangGraph is not installed.")
-    return {"nodes": _graph_runner.nodes(), "mermaid": _graph_runner.mermaid()}
+    return {"nodes": ctx.graph_runner.nodes(), "mermaid": ctx.graph_runner.mermaid()}
 
 
 @app.post("/graph/analyze")
-def graph_analyze(req: AnalyzeRequest) -> dict:
+def graph_analyze(req: AnalyzeRequest, ctx: CtxDep) -> dict:
     """Run a finding through the compiled graph (conditional routing + HITL interrupt).
 
     Returns a completed result, or ``status=awaiting_approval`` with a ``threadId`` to
     resume via ``POST /graph/resume/{thread_id}`` — durable human-in-the-loop.
     """
-    if _graph_runner is None:
+    if ctx.graph_runner is None:
         raise HTTPException(status_code=503, detail="LangGraph is not installed.")
     started = time.perf_counter()
-    out = _graph_runner.analyze(
+    out = ctx.graph_runner.analyze(
         req.finding.model_dump(), client=None, retriever=_retriever
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
     decision = out.get("decision") or {}
     outcome = out["action"]["outcome"] if out["status"] == "completed" else "pending_approval"
-    _audit.record(decision, outcome, actor="system", latency_ms=latency_ms)
+    ctx.audit.record(decision, outcome, actor="system", latency_ms=latency_ms)
     _observe_decision(decision, outcome, latency_ms)
     return out
 
 
 @app.post("/graph/resume/{thread_id}")
-def graph_resume(thread_id: str, req: GraphResumeRequest) -> dict:
+def graph_resume(
+    thread_id: str, req: GraphResumeRequest, ctx: CtxDep
+) -> dict:
     """Resume a paused graph run with the human's approve/reject (checkpointed HITL)."""
-    if _graph_runner is None:
+    if ctx.graph_runner is None:
         raise HTTPException(status_code=503, detail="LangGraph is not installed.")
     try:
-        out = _graph_runner.resume(thread_id, approved=req.approved)
+        out = ctx.graph_runner.resume(thread_id, approved=req.approved)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"No paused run for thread {thread_id}"
         ) from None
     decision = out.get("decision") or {}
     if out.get("action"):
-        _audit.record(decision, out["action"]["outcome"], actor="human")
+        ctx.audit.record(decision, out["action"]["outcome"], actor="human")
     return out
 
 
 @app.get("/findings")
-def list_findings() -> dict:
+def list_findings(ctx: CtxDep) -> dict:
     """Current-state findings (deduped by finding_hash), each with its linked ticket.
 
     This is the materialized view over the append-only audit trail: re-ingesting the
@@ -497,10 +543,10 @@ def list_findings() -> dict:
     of adding a duplicate row. A finding has at most one ticket (idempotency), so a
     Jira/ServiceNow link shows exactly once here.
     """
-    findings = project_findings(_audit.list_all())
-    pending = {p.findingHash for p in _approvals.list_pending()}
+    findings = project_findings(ctx.audit.list_all())
+    pending = {p.findingHash for p in ctx.approvals.list_pending()}
     for f in findings:
-        ticket = _provider.get(f["findingHash"])
+        ticket = ctx.provider.get(f["findingHash"])
         f["ticket"] = (
             {"key": ticket.key, "provider": ticket.provider, "status": ticket.status}
             if ticket is not None else None
@@ -511,16 +557,16 @@ def list_findings() -> dict:
 
 
 @app.get("/audit")
-def list_audit() -> dict:
+def list_audit(ctx: CtxDep) -> dict:
     """Append-only governance audit trail: why each decision was taken, by whom."""
-    records = _audit.list_all()
+    records = ctx.audit.list_all()
     return {"count": len(records), "records": [r.to_dict() for r in records]}
 
 
 @app.get("/deadletter")
-def list_dead_letter() -> dict:
+def list_dead_letter(ctx: CtxDep) -> dict:
     """Decisions whose ticket action failed (e.g. Jira API down) — replayable."""
-    items = _dead_letter.list_all()
+    items = ctx.dead_letter.list_all()
     return {
         "count": len(items),
         "items": [{"findingHash": i.findingHash, "error": i.error} for i in items],

@@ -395,4 +395,5 @@ flowchart TB
 | Metrics | Langfuse dashboards | **Prometheus** text exposition + rolling time-series + **alert rule engine** |
 | Vector store | pgvector (required) | **Lexical retriever** default; pgvector behind the `KnowledgeRetriever` seam |
 | State | Postgres | **memory → SQLite → Postgres** via `DATABASE_URL` (identical SQL schema) |
+| Tenancy/auth | — | **Per-tenant isolated state** + API-key/HS256-JWT auth + rate limiting (Day 15, ADR-017); off by default |
 | Run | — | `python scripts/demo_walkthrough.py` (offline) · `docker compose up` (full stack) |
