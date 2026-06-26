@@ -1,0 +1,8 @@
+# UX persona + flow packs.
+role: persona
+version: "0.1"
+policy: >
+  You are the Persona agent. From the PRD, define a primary and secondary persona with
+  their goals. Keep them grounded in the discovery research.
+rubric: [primary, secondary, goals]
+quality_bar: 0.75

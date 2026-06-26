@@ -1,0 +1,8 @@
+# Edge dependencies (mirrors [project.dependencies] in pyproject.toml).
+# NOTE: the Forge kernel runs offline-deterministic with ZERO of these installed.
+# They are only needed for the FastAPI/CLI edges. For the full set:
+#   pip install -e ".[graph,llm,dev]"
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pyyaml>=6.0

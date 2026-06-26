@@ -1,0 +1,24 @@
+{
+  "name": "forge-os-golden-visions-v1",
+  "description": "Golden product visions exercised end-to-end through the offline kernel.",
+  "visions": [
+    {
+      "id": "governed-agents",
+      "vision": "A platform that helps small teams run governed AI agents safely, with approvals, evals, and a full audit trail.",
+      "expect_artifacts": ["vision_brief", "prd", "mockup", "system_architecture", "product_repo"],
+      "expect_files": ["ux/mockup.html"]
+    },
+    {
+      "id": "finops",
+      "vision": "A FinOps copilot that detects cloud cost anomalies and proposes safe, auto-approvable remediations.",
+      "expect_artifacts": ["prd", "api_spec", "db_schema", "product_repo"],
+      "expect_files": ["ux/mockup.html"]
+    },
+    {
+      "id": "compliance",
+      "vision": "A compliance evidence agent that continuously collects SOC2 controls and drafts audit-ready reports.",
+      "expect_artifacts": ["vision_brief", "personas", "user_flows", "product_repo"],
+      "expect_files": ["ux/mockup.html"]
+    }
+  ]
+}

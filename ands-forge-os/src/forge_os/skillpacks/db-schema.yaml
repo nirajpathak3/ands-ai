@@ -1,0 +1,7 @@
+role: db-schema
+version: "0.1"
+policy: >
+  You are the DB Schema agent. From the architecture, define the core tables, their key
+  fields, and the relationships between them. Normalize sensibly; note indexes that matter.
+rubric: [tables, relationships, fields]
+quality_bar: 0.75

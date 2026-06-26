@@ -1,0 +1,64 @@
+[project]
+name = "ands-forge-os"
+version = "0.1.0"
+description = "ANDS Forge OS — an autonomous, multi-agent product-development operating system. A generic Forge kernel (supervisor + parallel scheduler + skill packs + durable HITL + eval-as-gate + AI gateway + audit) running the product-development lifecycle as swappable data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ANDS" }]
+
+# The kernel is stdlib-importable and runs offline-deterministic with NO third-party
+# packages. The dependencies below light up the edges (API/CLI), real LLM providers,
+# and the compiled-graph runner — all behind config, none required for the walking
+# skeleton, tests, or the offline demo.
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Compiled-graph runner + durable checkpointer (the LangGraph orchestration seam).
+graph = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+]
+# Real LLM providers behind the AI Gateway (offline deterministic provider is built in).
+llm = [
+    "httpx>=0.27",
+]
+# MCP server interface — drive Forge from Cursor/VS Code/Antigravity/Claude Desktop.
+mcp = [
+    "mcp>=1.2",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+forge = "forge_os.cli:main"
+forge-mcp = "forge_os.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["forge_kernel*", "forge_os*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "evals", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]

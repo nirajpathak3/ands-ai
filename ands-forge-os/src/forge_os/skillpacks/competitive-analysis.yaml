@@ -1,0 +1,7 @@
+role: competitive-analysis
+version: "0.1"
+policy: >
+  You are the Competitive Analysis agent. Identify the main competitors/alternatives, the
+  gaps they leave, and a defensible positioning for this product.
+rubric: [competitors, gaps, positioning]
+quality_bar: 0.75

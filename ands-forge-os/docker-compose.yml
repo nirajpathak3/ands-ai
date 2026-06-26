@@ -1,0 +1,35 @@
+# ANDS Forge OS — local stack. Runs fully offline (no API keys, deterministic).
+#
+#   docker compose up -d --build     # build + start the API + dashboard
+#   docker compose down              # stop (keeps the runs volume)
+#
+# Dashboard:  http://localhost:8099/        Health: http://localhost:8099/health
+#
+# To go live: set OPENAI_API_KEY / ANTHROPIC_API_KEY and FORGE_MODE=live (real providers
+# activate behind the AI Gateway; the deterministic provider remains the final fallback).
+
+services:
+  forge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ands-forge-os:latest
+    container_name: ands-forge-os
+    # Optional: drop a .env beside this file (copy of .env.example) to inject keys + live
+    # mode into the container. It's gitignored; values here override anything in .env.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # FORGE_MODE defaults to offline in code; set it (and keys) via .env to go live.
+      # Values listed here would override .env, so keep secrets/mode in .env only.
+      FORGE_WORKSPACE: /data
+      LOG_JSON: "true"
+    ports:
+      - "8099:8099"
+    volumes:
+      - forgedata:/data
+    restart: unless-stopped
+
+volumes:
+  forgedata:

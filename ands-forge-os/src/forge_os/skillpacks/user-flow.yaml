@@ -1,0 +1,7 @@
+role: user-flow
+version: "0.1"
+policy: >
+  You are the User Flow agent. Define the key user flows: entry points and the ordered
+  steps to the core value moment. Keep flows short and outcome-oriented.
+rubric: [flows, steps, entrypoints]
+quality_bar: 0.75

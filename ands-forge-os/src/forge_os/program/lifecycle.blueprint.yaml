@@ -1,0 +1,157 @@
+# ANDS Forge OS — the product-development PROGRAM (MVP vertical slice, PRODUCT_VISION §12).
+#
+# This is DATA: the Forge kernel executes it without knowing anything about product
+# development. Swap this file (and the skill packs) to run the same kernel on any project.
+#
+# Edge legend (from the lifecycle diagram):
+#   - stage order + gates  = solid edges (a stage opens after the prior gate approves)
+#   - `informs`            = dotted edges (non-blocking shift-left context)
+#
+# Materiality dial per stage gate:
+#   always-human | auto-if-eval | auto
+# The slice forces a human on the 3 highest-stakes gates (plan, PRD, mockup) and lets the
+# rest flow autonomously when the eval bar is met. Security/Analytics/Ops are auto-pass
+# stubs for now.
+
+name: ands-forge-os
+version: "0.1"
+description: >
+  Vision Intake -> plan approval -> Discovery (parallel) -> PRD -> UX (personas + flows +
+  one rendered HTML mockup) -> System architecture + API/DB sketch -> scaffolded repo.
+
+stages:
+  - key: intake
+    title: Vision Intake & Plan
+    order: 0
+    gate_mode: always-human          # gate #1: approve the Vision Brief + compiled plan
+    artifacts:
+      - key: vision_brief
+        title: Vision Brief
+        role: vision-intake
+        skillpack: vision-intake
+        quality_bar: 0.75
+        rubric: [problem, audience, success_metrics, constraints, non_goals]
+
+  - key: discovery
+    title: Discovery
+    order: 1
+    gate_mode: auto-if-eval          # parallel fan-out: 3 independent agents at once
+    artifacts:
+      - key: user_research
+        title: User Research
+        role: user-research
+        skillpack: user-research
+        rubric: [personas, needs, pain_points]
+      - key: competitive_analysis
+        title: Competitive Analysis
+        role: competitive-analysis
+        skillpack: competitive-analysis
+        rubric: [competitors, gaps, positioning]
+      - key: business_case
+        title: Business Case
+        role: business-case
+        skillpack: business-case
+        rubric: [market, value, risks]
+
+  - key: strategy
+    title: Strategy / PRD
+    order: 2
+    gate_mode: always-human          # gate #2: approve the PRD
+    artifacts:
+      - key: prd
+        title: Product Requirements Document
+        role: prd-author
+        skillpack: prd-author
+        depends_on: [user_research, competitive_analysis, business_case]
+        quality_bar: 0.8
+        rubric: [problem, features, metrics, scope]
+      - key: ai_capability_map
+        title: AI Capability Map
+        role: ai-capability-mapper
+        skillpack: ai-capability-mapper
+        rubric: [models, inputs, outputs]
+
+  - key: ux
+    title: UX
+    order: 3
+    gate_mode: always-human          # gate #3: approve a rendered mockup
+    artifacts:
+      - key: personas
+        title: User Personas
+        role: persona
+        skillpack: persona
+        depends_on: [prd]
+        rubric: [primary, secondary, goals]
+      - key: user_flows
+        title: User Flows
+        role: user-flow
+        skillpack: user-flow
+        depends_on: [prd]
+        rubric: [flows, steps, entrypoints]
+      - key: mockup
+        title: Wireframe + HTML Mockup
+        role: mockup
+        skillpack: mockup
+        depends_on: [personas, user_flows]
+        rubric: [screens, layout, cta]
+        params: { tool: render_mockup }
+
+  - key: technical
+    title: Technical Architecture
+    order: 4
+    gate_mode: auto-if-eval
+    artifacts:
+      - key: system_architecture
+        title: System Architecture
+        role: system-architect
+        skillpack: system-architect
+        depends_on: [prd]
+        informs: [security_reqs, analytics_plan]   # shift-left (non-blocking)
+        rubric: [components, data_flow, infrastructure]
+      - key: api_spec
+        title: API Specification
+        role: api-spec
+        skillpack: api-spec
+        depends_on: [system_architecture]
+        rubric: [endpoints, contracts, methods]
+      - key: db_schema
+        title: Database Schema
+        role: db-schema
+        skillpack: db-schema
+        depends_on: [system_architecture]
+        rubric: [tables, relationships, fields]
+
+  - key: scaffold
+    title: Repo Scaffold
+    order: 5
+    gate_mode: auto
+    artifacts:
+      - key: product_repo
+        title: Scaffolded Product Repo
+        role: scaffolder
+        skillpack: scaffolder
+        depends_on: [prd, system_architecture, api_spec, db_schema]
+        rubric: [readme, structure, tests]
+        params: { tool: scaffold_repo }
+
+  # --- Stubbed downstream stages (auto-pass placeholders, PRODUCT_VISION §12) ----------
+  - key: security
+    title: Security (stub)
+    order: 6
+    auto_pass: true
+    artifacts:
+      - { key: security_reqs, title: Security Requirements, role: security-reqs }
+
+  - key: analytics
+    title: Analytics (stub)
+    order: 7
+    auto_pass: true
+    artifacts:
+      - { key: analytics_plan, title: Analytics Plan, role: analytics-plan }
+
+  - key: ops
+    title: Ops Readiness (stub)
+    order: 8
+    auto_pass: true
+    artifacts:
+      - { key: prr, title: Production Readiness Review, role: prr }
