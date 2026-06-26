@@ -26,38 +26,90 @@ what I've been building for years — orchestration, governance, cost control, f
 human oversight. The difference is there's non-determinism in the loop now, which makes it harder
 and more interesting.
 
-I'm building an AI Security Operations Copilot: it takes scanner findings, reasons over them with
-RAG-grounded security knowledge, and drives ticket lifecycle through confidence-gated workflows —
-with evaluation pipelines to prove it works and observability to prove it's healthy.
+I build around one thesis — models get commoditized, trust doesn't. ANDS Forge OS is a governed
+multi-agent OS that takes a product vision and drives the development lifecycle with
+human-approval gates, evals-as-gates, and a full audit trail. ANDS Sentinel red-teams those
+agents in CI to prove their guardrails hold. Both sit on the substrate I built in my AI Security
+Operations Copilot — AI gateway, RAG, governance, evals, and observability.
 
 ---
 
 ### AI Platform Projects
 
-**AI Security Operations Copilot** — In active development
+**ANDS Forge OS — Autonomous Product-Development OS** — built, offline-deterministic
+github.com/[your-handle]/ands-forge-os
+
+A governed multi-agent operating system: give it a product vision and it runs the
+product-development lifecycle (discovery → PRD → UX → architecture → scaffold) across a
+hierarchy of specialized agents, pausing for human approval at materiality-gated checkpoints
+and emitting real artifacts with a full audit trail.
+
+- Two clean layers: a domain-agnostic kernel and the product-dev program as swappable data
+  (a lifecycle DAG + 13 trainable skill packs) — the same kernel retargets to any domain by
+  loading a different blueprint
+- Topological scheduler runs independent agents in parallel waves under a cost/time budget
+  governor (the net-new orchestration, over a compiled-graph seam)
+- Eval-as-gate + a materiality dial (auto / auto-if-eval≥bar / always-human): low-risk stages
+  flow autonomously, high-stakes ones force a human; Critic + red-team review every artifact
+- Durable HITL: runs pause and resume across separate processes via a persistent RunStore;
+  rejection reopens a stage with bounded iterations
+- Ported the copilot substrate — AI Gateway (routing/fallback/cache/cost), eval harness,
+  observability tracer, append-only audit — proving the patterns generalize across domains
+- Kernel is stdlib-only and $0 offline-deterministic; 28 tests, ruff clean, eval regression
+  gate (3 golden visions), CLI + FastAPI dashboard, CI (3.11/3.12) + Docker + compose
+
+Stack: Python · data-driven DAG orchestration · parallel scheduler · eval-as-gate · durable
+HITL · AI Gateway · structured tracing
+
+---
+
+**AI Security Operations Copilot** — the substrate (in active development)
 github.com/[your-handle]/ai-secops-copilot
 
 An enterprise AI platform that automates the security-finding lifecycle — from analysis and
-false-positive detection to governed Jira ticket creation and remediation tracking.
+false-positive detection to governed Jira ticket creation and remediation tracking. Its reusable
+patterns (gateway, governance, evals, observability) became the substrate under Forge OS and
+Sentinel.
 
 - Ingests Semgrep/SARIF findings and runs a LangGraph agent pipeline (Finding Analysis →
   Ticket Decision → Governance Gate) with structured Pydantic output validation at each step
-- RAG layer (pgvector + OWASP/CWE/CVE corpus) grounds reasoning and cites knowledge sources
+- RAG layer (pgvector + OWASP/CWE corpus) grounds reasoning and cites knowledge sources
   rather than letting the model hallucinate severity
 - Confidence-gated governance: above threshold → auto-execute; in the middle band → human
   approval; below → escalate. Same pattern I used in a real-time automation system, now applied
   to security ops
-- MCP tool layer drives Jira (real) and ServiceNow (mock) in a provider-agnostic way — swap
-  adapters without touching decision logic
-- AI Gateway (NestJS) sits in front of every model call: OpenAI primary, Claude fallback,
-  Redis semantic cache, token/cost/latency tracking per request
+- MCP-style tool layer drives Jira (real) and ServiceNow (mock) in a provider-agnostic way —
+  swap adapters without touching decision logic
+- AI Gateway in front of every model call: OpenAI primary, Claude fallback, deterministic
+  offline; semantic cache + per-request token/cost/latency tracking and traces
 - Evaluation harness on a labeled golden dataset — severity accuracy, FP precision/recall,
   ticket-action accuracy — runs after every prompt or model change to catch regressions
 - Idempotent ticket creation using finding hash keys; structured output validation before
   any tool runs; prompt-injection isolation for untrusted finding content
 
-Stack: Python · LangGraph · FastAPI · NestJS/TypeScript · pgvector · Redis · OpenAI/Anthropic ·
-Langfuse · OpenTelemetry
+Stack: Python · LangGraph · FastAPI · pgvector · OpenAI/Anthropic · OpenTelemetry
+(control-plane gateway scaffolded in NestJS/TypeScript)
+
+---
+
+**ANDS Sentinel — Agent Red-Team & Guardrail Verifier** — in development
+github.com/[your-handle]/ands-agent-verifier
+
+A CI-grade verifier that adversarially attacks your *own* AI agents — prompt injection,
+tool-use abuse, multi-agent pipeline poisoning, and agent-governance/eval-gate bypass — and
+emits a governed pass/fail report with an audit trail. Forge OS builds agents; Sentinel proves
+they hold.
+
+- Planner → Attacker (fan-out across attack classes) → Observer → Judge → CI gate; target
+  agents plug in behind a Target port (ports & adapters)
+- Reuses the eval harness as the scoring engine (each attack is an eval case; known-bad must
+  be caught), plus governance/reasonCode, AI Gateway, and tracing
+- Validated against ANDS Forge OS — caught a real governance bypass (an eval gate that scores
+  by token overlap can be defeated by keyword-stuffing to auto-approve past a human gate) and
+  correctly cleared a hardened control (sandbox path-traversal), so it isn't a false-positive
+  generator
+
+Stack: Python · agentic red-teaming · eval-as-gate · governed verdicts · CI integration
 
 ---
 
@@ -77,21 +129,6 @@ a confidence-gated, human-in-the-loop governance model.
 - Structured observability: every decision, action, and transition logged via pino
 
 Stack: NestJS · TypeScript · DDD · Whisper STT · Redis · WebSocket · OpenTelemetry
-
----
-
-**Multi-Agent Orchestration Platform** — veho-platform
-(Active development — LangGraph upgrade in progress)
-
-Governed SDLC orchestration framework where specialized agents collaborate through gated
-workflows — Intake → Plan → Architect → Build → Review → QA → Release.
-
-- Shared blackboard state per project; agents read and write structured context without
-  tight coupling
-- Human approval gates between each phase; escalation paths for failures
-- Pattern mirrors what most teams need once AI is in the development loop
-
-Stack: TypeScript · NestJS · LangGraph (in progress) · Redis
 
 ---
 
@@ -148,8 +185,10 @@ platform, responsible for orchestration, integrations, and API platform evolutio
 
 ### Core Skills
 
-**AI Platform:** LangGraph · RAG · pgvector · MCP · LLM evals · HITL governance · Langfuse ·
-prompt/structured output engineering · AI Gateway design
+**AI Platform:** Multi-agent orchestration (supervisor/scheduler/parallel waves) · LangGraph ·
+RAG · pgvector · MCP · LLM evals & eval-as-gate · HITL governance & materiality dial · agent
+red-teaming / guardrail verification · prompt/structured-output engineering · AI Gateway design ·
+trainable skill packs
 
 **Backend & Platform:** Node.js · TypeScript · NestJS · Python · GraphQL Federation · REST ·
 WebSocket · WebRTC · AWS (Lambda, DynamoDB, CloudWatch) · Kubernetes · Docker · CI/CD
@@ -198,17 +237,25 @@ LinkedIn, Naukri, and in interviews. Format: employer line = Orangebits, deploye
 Security. This is standard for staffing/deployment arrangements. Softened AI line to
 "Applied LangChain/LangGraph-based automation patterns" — more honest and still strong.
 
+**Update (2026-06-26):** Led the projects with **ANDS Forge OS** (now actually built — 28 tests,
+eval gate, CI/Docker), added **ANDS Sentinel** (agent red-team verifier, in development), and
+retired the old `veho-platform` entry which Forge OS supersedes. Reframed the summary/LinkedIn/Naukri
+around the *build → govern → prove* arc. **Aligned copilot claims with the as-built system:** the
+AI Gateway is a Python in-process module (not NestJS), the offline cache is lexical, and traces are
+in-process/OTEL-compatible — so every line is defensible under questioning. NestJS is noted only as
+the scaffolded control-plane. Don't re-inflate these without wiring them first.
+
 ---
 
 ## LinkedIn
 
 ### Headline
 
-Backend Architect turned AI Platform Engineer — distributed systems, agentic workflows,
+Backend Architect turned AI Platform Engineer — multi-agent orchestration, agent security,
 RAG, governance, evals
 
 (Shorter option if that feels too long)
-Building production-grade AI platforms | Orchestration · RAG · HITL · Observability · 17 yrs backend
+Building governed multi-agent platforms | Orchestration · Agent security · HITL · Evals · 17 yrs backend
 
 ---
 
@@ -228,10 +275,13 @@ because agentic systems have the exact same hard problems I've been solving for 
 you orchestrate across failures, how do you govern autonomous actions, how do you know if the
 system is doing what you intended, and how do you control cost at scale?
 
-I'm building AI Security Operations Copilot — a platform that takes scanner findings, uses
-RAG-grounded reasoning over OWASP and CWE, and drives Jira ticket lifecycle through
-confidence-gated, human-approved workflows. Evals and observability are first-class from
-day one.
+Lately I've been building a portfolio around one idea — models get commoditized, trust doesn't.
+ANDS Forge OS is a governed multi-agent OS that takes a product vision and runs the development
+lifecycle through parallel specialized agents with human-approval gates, evals-as-gates, and a
+full audit trail. ANDS Sentinel red-teams those agents in CI (prompt injection, tool-use abuse,
+governance bypass) to prove their guardrails hold. Both reuse the substrate I built in my AI
+Security Operations Copilot — AI gateway, RAG over OWASP/CWE, confidence-gated governance, evals,
+and observability.
 
 Outside of that I mentor engineers (workshops, Chandigarh community) and I cook — I like both
 for the same reason: there's a process, you follow it, and if you pay attention you get something
@@ -243,7 +293,15 @@ Open to AI Platform Engineer and AI Native Backend roles. Remote or hybrid.
 
 ### Featured / Projects entry
 
-**AI Security Operations Copilot** — ongoing
+**ANDS Forge OS** — governed multi-agent OS (built, offline-deterministic)
+Vision in → parallel specialized agents → HITL gates + eval-as-gate → real artifacts, fully audited.
+[github link when public]
+
+**ANDS Sentinel** — agent red-team & guardrail verifier (in development)
+CI-grade attacks (prompt injection, tool abuse, governance bypass) on your own agents → governed pass/fail.
+[github link when public]
+
+**AI Security Operations Copilot** — the substrate (ongoing)
 RAG + LangGraph + MCP + HITL governance for automated security finding triage and Jira ticketing.
 [github link when public]
 
@@ -280,9 +338,11 @@ enterprise integrations (Jira, ServiceNow, GitHub), and observability. Deployed 
 (via Orangebits) as backend architect on their ASPM platform: event-driven orchestration across
 100+ security integrations, federated APIs, and reliability engineering at scale.
 
-Currently building AI Security Operations Copilot — LangGraph agent pipeline with RAG
-(pgvector), MCP tool integrations, confidence-gated governance, and an evaluation harness
-to measure quality and catch regressions.
+Currently building governed agentic platforms: ANDS Forge OS (a multi-agent orchestration OS
+with a parallel scheduler, HITL materiality gates, and eval-as-gate), ANDS Sentinel (a CI-grade
+agent red-team / guardrail verifier), and an AI Security Operations Copilot (LangGraph + RAG over
+pgvector + MCP tools + confidence-gated governance + an eval harness) that serves as the shared
+substrate.
 
 Looking for AI Platform Engineer or senior backend roles where production maturity matters.
 Based in Chandigarh; open to remote and hybrid.
@@ -291,9 +351,10 @@ Based in Chandigarh; open to remote and hybrid.
 
 ### Skills tags to select on Naukri
 
-Node.js · TypeScript · NestJS · Python · LangGraph · RAG · Vector Database · PostgreSQL
-Redis · AWS · Kubernetes · Microservices · Event-Driven Architecture · GraphQL · REST API
-OpenTelemetry · Jira · ServiceNow · System Design · AI Platform
+Node.js · TypeScript · NestJS · Python · LangGraph · Multi-Agent Orchestration · RAG ·
+Vector Database · PostgreSQL · Redis · AWS · Kubernetes · Microservices · Event-Driven
+Architecture · GraphQL · REST API · OpenTelemetry · LLM Evaluation · AI Security · Jira ·
+ServiceNow · System Design · AI Platform
 
 ---
 
@@ -543,7 +604,74 @@ and design the path accordingly."
 
 ---
 
-### 13. System design question — "design an AI finding triage platform"
+### 13. Multi-agent orchestration (ANDS Forge OS)
+
+**What they ask:**
+When do you use multiple agents vs one? How do you coordinate them? Why not just a linear chain?
+
+**What you know:**
+Forge OS compiles a declarative lifecycle blueprint (a DAG of stages → artifacts → owning role)
+into a plan, then a topological scheduler runs all *ready* nodes in parallel waves under a
+cost/time budget governor. A supervisor owns the shared blackboard; each agent reads only its
+incoming-edge inputs (scoped context), produces a structured artifact, and a Critic + red-team
+review it before a gate.
+
+**How to explain it:**
+"A linear chain is fine until work is independent or needs branching. The blueprint is data, not
+code — so the same kernel builds a fintech PRD or a healthcare PRD by swapping the blueprint and
+skill packs. The net-new piece is the scheduler: topological parallel waves with a budget
+governor, so independent agents run concurrently but cost stays bounded."
+
+**Why it lands:**
+"It separates the generic engine from the domain program. That's the difference between 'an agent
+script' and an orchestration platform."
+
+---
+
+### 14. Agent security & red-teaming (ANDS Sentinel)
+
+**What they ask:**
+How do you know your agents are safe? What attacks matter for agentic systems?
+
+**What you know:**
+Sentinel is a CI-grade verifier that attacks my own agents across four classes: indirect/RAG
+prompt injection, tool-use abuse (e.g. path traversal on file-writing tools), multi-agent
+pipeline poisoning (a malicious upstream artifact steering a downstream agent), and
+governance/eval-gate bypass. Each attack is an eval case; known-bad must be caught; verdicts are
+governed and audited.
+
+**The story to tell:**
+"I pointed it at Forge OS and it caught a real bug: the auto-if-eval gate scored artifacts by
+token overlap, so a keyword-stuffed, low-substance artifact could inflate its score and
+auto-approve past the human gate. Sentinel flagged it, CI went red, I hardened the gate, CI went
+green. It also correctly *passed* a path-traversal attempt the sandbox already blocks — so it's
+not a false-positive generator."
+
+**Why it matters:**
+"Everyone is shipping agents with tool access; almost no one tests them adversarially. That's the
+unsolved, durable pain — and it's a CI problem, not a one-time pen test."
+
+---
+
+### 15. Eval-as-gate & the materiality dial
+
+**What they ask:**
+How do you let an agent act autonomously without losing control?
+
+**What you know:**
+Every stage has a machine-checkable Definition-of-Done (the Critic/red-team eval score vs a
+quality bar) and a per-gate materiality mode: `auto`, `auto-if-eval≥bar`, or `always-human`.
+Low-risk stages flow autonomously; high-stakes stages force a human regardless of score. Every
+gate decision is an append-only audit event with a reason code.
+
+**How to explain it:**
+"Autonomy and control aren't opposites — they're a dial. You tie 'who approves' to 'what's the
+cost of being wrong'. The eval gate is the objective signal; the materiality dial is the policy.
+Together they make a run feel autonomous while keeping humans on the high-stakes calls."
+
+---
+
+### 16. System design question — "design an AI finding triage platform"
 
 They'll give you a blank board and ask how you'd design it from scratch.
 
@@ -565,7 +693,7 @@ in production."
 
 ---
 
-### 14. Behavioral / leadership questions
+### 17. Behavioral / leadership questions
 
 **"Tell me about a complex system you designed."**
 Ox orchestration platform: 100+ integrations, event-driven, BullMQ, idempotency, backpressure.
@@ -582,7 +710,7 @@ services. Led to improving observability standards.
 
 ---
 
-### 15. Questions you should ask them
+### 18. Questions you should ask them
 
 These signal Staff-level thinking. Pick 2-3.
 
@@ -598,14 +726,20 @@ These signal Staff-level thinking. Pick 2-3.
 
 ## Quick checklist before each interview
 
-- Copilot demo flow clear in head: finding → analysis → confidence → gate → Jira → metrics
-- Three strong follow-up threads ready: evals · idempotency · governance
+- Forge OS demo flow clear in head: vision → plan approval → parallel agents → HITL gates →
+  artifact + scaffold on disk → audit/cost
+- Sentinel demo flow clear: attack Forge OS → catch the eval-gate bypass (CI red) → path-traversal
+  passes (no false alarm) → harden → CI green
+- Copilot demo flow clear: finding → analysis → confidence → gate → Jira → metrics
+- Three strong follow-up threads ready: eval-as-gate · agent security · governance/HITL
 - One Ox story ready (orchestration scale or reliability)
-- GitHub link in hand (if repo is public)
-- Resume and LinkedIn consistent — no contradictions
+- GitHub links in hand (if repos are public)
+- Resume and LinkedIn consistent — no contradictions; claims match the as-built systems
 - Intro practiced out loud, not read
 
 ---
 
-*This file: D:\ai-secops-copilot\docs\planning\resume-and-prep.md*
-*Last updated: profile and interview prep thread*
+*This file: D:\ands-ai\agentic-portfolio\career\resume-and-prep.md*
+*Last updated: 2026-06-26 — added ANDS Forge OS (built) + ANDS Sentinel (in dev), reframed the*
+*build→govern→prove narrative, added prep topics 13–15 (orchestration, agent security,*
+*eval-as-gate), and aligned copilot claims with the as-built system.*
