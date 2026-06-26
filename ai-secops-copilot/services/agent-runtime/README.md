@@ -326,6 +326,40 @@ docker compose up -d --build      # dashboard at http://localhost:8088/dashboard
 
 `make check` runs the full local gate (lint + tests + eval gate), exactly what CI runs.
 
+## MCP interface (drive the runtime from your IDE)
+
+The same governed pipeline is exposed over the **Model Context Protocol** so an MCP client
+(Cursor, VS Code, Antigravity, Claude Desktop) can analyze findings, walk the governance gate,
+and work the approval queue — no HTTP server required. The tool logic lives in `app/mcp_tools.py`
+(dependency-free, offline-deterministic) behind a thin FastMCP wrapper in `app/mcp_server.py`.
+
+```bash
+pip install -e ".[mcp,llm]"      # adds the `mcp` package + the agent-runtime-mcp script
+agent-runtime-mcp                # serves over stdio (what the MCP client launches)
+```
+
+Tools: `secops_analyze_finding`, `secops_governance_preview`, `secops_list_findings`,
+`secops_list_approvals`, `secops_approve`, `secops_reject`, `secops_audit`, `secops_metrics`,
+`secops_knowledge_search`. They run against the default tenant with the deterministic offline
+pipeline by default (no keys); set provider keys to analyze with a real model.
+
+Register it in your MCP client (`mcp.json`). On Windows the console script may not be on
+`PATH`, so invoke the module with an absolute Python and pin `cwd` to this directory:
+
+```json
+{
+  "mcpServers": {
+    "secops-agent-runtime": {
+      "command": "C:\\path\\to\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "C:\\path\\to\\ai-secops-copilot\\services\\agent-runtime"
+    }
+  }
+}
+```
+
+(Where the script *is* on `PATH`, `"command": "agent-runtime-mcp"` with no args is enough.)
+
 ## Test
 
 ```bash
@@ -360,6 +394,8 @@ app/
 ├─ auth.py          # API-key + HS256 JWT auth, tenant resolution (Day 15, ADR-017)
 ├─ ratelimit.py     # per-tenant fixed-window rate limiter (Day 15)
 ├─ tenancy.py       # TenantRegistry: isolated per-tenant state/provider/gateway/graph
+├─ mcp_tools.py     # MCP tool logic (dependency-free): analyze/govern/approve/audit/metrics
+├─ mcp_server.py    # FastMCP wrapper + agent-runtime-mcp entry point (stdio)
 ├─ main.py          # FastAPI app (/graph, /dashboard, /metrics, /analyze, /ingest, ...)
 ├─ static/          # single-page operations dashboard (served at /dashboard)
 └─ graph/           # LangGraph: state, nodes, build (compiled graph), runner (HITL+checkpoint)
